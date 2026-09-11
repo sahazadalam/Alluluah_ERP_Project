@@ -1,0 +1,315 @@
+import { useEffect, useState } from 'react';
+import { supabase } from '../../lib/supabase';
+import { Invoice, Customer, Product } from '../../lib/types';
+import { formatCurrency } from '../../lib/types';
+import { useAuth } from '../../context/AuthContext';
+import { Plus, Trash2, X } from 'lucide-react';
+
+interface Props {
+  editing: Invoice | null;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+interface LineItem {
+  id?: string;
+  product_id: string | null;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  discount_percent: number;
+  vat_rate: number;
+  line_total: number;
+  vat_amount: number;
+  total: number;
+  sort_order: number;
+}
+
+const emptyLine = (): LineItem => ({
+  product_id: null, description: '', quantity: 1, unit_price: 0,
+  discount_percent: 0, vat_rate: 5, line_total: 0, vat_amount: 0, total: 0, sort_order: 0,
+});
+
+const calcLine = (l: LineItem): LineItem => {
+  const line_total = l.quantity * l.unit_price * (1 - l.discount_percent / 100);
+  const vat_amount = line_total * (l.vat_rate / 100);
+  return { ...l, line_total, vat_amount, total: line_total + vat_amount };
+};
+
+export default function InvoiceFormModal({ editing, onClose, onSaved }: Props) {
+  const { profile } = useAuth();
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [form, setForm] = useState({
+    customer_id: '' as string | null, customer_name: '', customer_address: '', customer_trn: '',
+    issue_date: new Date().toISOString().split('T')[0],
+    due_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+    notes: '', terms: 'Payment due within 30 days.',
+    status: 'draft' as Invoice['status'],
+  });
+  const [lines, setLines] = useState<LineItem[]>([emptyLine()]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadData();
+    if (editing) loadEditing();
+  }, []);
+
+  const loadData = async () => {
+    const [{ data: custs }, { data: prods }] = await Promise.all([
+      supabase.from('customers').select('*').eq('is_active', true).order('name'),
+      supabase.from('products').select('*').eq('is_active', true).order('name'),
+    ]);
+    setCustomers(custs ?? []);
+    setProducts(prods ?? []);
+  };
+
+  const loadEditing = async () => {
+    if (!editing) return;
+    setForm({
+      customer_id: editing.customer_id, customer_name: editing.customer_name,
+      customer_address: editing.customer_address, customer_trn: editing.customer_trn,
+      issue_date: editing.issue_date, due_date: editing.due_date ?? '',
+      notes: editing.notes, terms: editing.terms, status: editing.status,
+    });
+    const { data: items } = await supabase.from('invoice_items').select('*').eq('invoice_id', editing.id).order('sort_order');
+    setLines(items?.length ? items.map(i => ({
+      id: i.id, product_id: i.product_id, description: i.description,
+      quantity: i.quantity, unit_price: i.unit_price, discount_percent: i.discount_percent,
+      vat_rate: i.vat_rate, line_total: i.line_total, vat_amount: i.vat_amount, total: i.total, sort_order: i.sort_order,
+    })) : [emptyLine()]);
+  };
+
+  const selectCustomer = (id: string) => {
+    const c = customers.find(c => c.id === id);
+    setForm(f => ({ ...f, customer_id: id, customer_name: c?.name ?? '', customer_address: c?.address ?? '', customer_trn: c?.trn ?? '' }));
+  };
+
+  const selectProduct = (idx: number, productId: string) => {
+    const p = products.find(p => p.id === productId);
+    if (!p) return;
+    setLines(lines.map((l, i) => i === idx ? calcLine({ ...l, product_id: productId, description: p.name, unit_price: p.selling_price }) : l));
+  };
+
+  const updateLine = (idx: number, field: keyof LineItem, value: unknown) => {
+    setLines(lines.map((l, i) => i === idx ? calcLine({ ...l, [field]: value }) : l));
+  };
+
+  const addLine = () => setLines([...lines, { ...emptyLine(), sort_order: lines.length }]);
+  const removeLine = (idx: number) => setLines(lines.filter((_, i) => i !== idx));
+
+  const subtotal = lines.reduce((s, l) => s + l.line_total, 0);
+  const vatAmount = lines.reduce((s, l) => s + l.vat_amount, 0);
+  const total = subtotal + vatAmount;
+
+  const handleSave = async () => {
+    if (!form.customer_name.trim()) { setError('Customer name is required'); return; }
+    if (lines.every(l => !l.description.trim())) { setError('At least one line item is required'); return; }
+    setSaving(true);
+    setError('');
+
+    let invoiceNumber = editing?.invoice_number ?? '';
+    if (!editing) {
+      const ts = Date.now().toString().slice(-6);
+      invoiceNumber = `INV-${ts}`;
+    }
+
+    const payload = {
+      ...form, invoice_number: invoiceNumber,
+      branch_id: editing?.branch_id ?? profile?.branch_id,
+      subtotal, discount_amount: 0, vat_rate: 5, vat_amount: vatAmount, total,
+      balance_due: editing?.balance_due ?? total,
+      paid_amount: editing?.paid_amount ?? 0,
+      created_by: editing?.created_by ?? profile?.id,
+    };
+
+    let invId = editing?.id;
+    if (editing) {
+      const newBalance = Math.max(0, total - (editing.paid_amount ?? 0));
+      const { error: updErr } = await supabase.from('invoices').update({ ...payload, balance_due: newBalance, updated_at: new Date().toISOString() }).eq('id', editing.id);
+      if (updErr) { setError(updErr.message); setSaving(false); return; }
+      const { error: delErr } = await supabase.from('invoice_items').delete().eq('invoice_id', editing.id);
+      if (delErr) { setError(delErr.message); setSaving(false); return; }
+    } else {
+      const { data, error: err } = await supabase.from('invoices').insert(payload).select().maybeSingle();
+      if (err) { setError(err.message); setSaving(false); return; }
+      invId = data?.id;
+    }
+
+    if (invId) {
+      const validLines = lines.filter(l => l.description.trim());
+      const { error: itemErr } = await supabase.from('invoice_items').insert(
+        validLines.map((l, i) => {
+          const { id, ...fields } = l;  // eslint-disable-line @typescript-eslint/no-unused-vars
+          return { ...fields, invoice_id: invId, sort_order: i };
+        })
+      );
+      if (itemErr) { setError(itemErr.message); setSaving(false); return; }
+    }
+
+    setSaving(false);
+    onSaved();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[95vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+          <h2 className="text-lg font-semibold text-slate-800">{editing ? 'Edit Invoice' : 'New Invoice'}</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 p-6 space-y-5">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Customer *</label>
+              <select value={form.customer_id ?? ''} onChange={e => selectCustomer(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">-- Select Customer --</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {!form.customer_id && (
+                <input value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))}
+                  placeholder="Or type customer name" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mt-2" />
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Customer TRN</label>
+              <input value={form.customer_trn} onChange={e => setForm(f => ({ ...f, customer_trn: e.target.value }))}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Issue Date</label>
+              <input type="date" value={form.issue_date} onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Due Date</label>
+              <input type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
+              <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as Invoice['status'] }))}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                {['draft','sent','paid','partial','overdue','cancelled'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+              </select>
+            </div>
+            <div className="col-span-3">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Customer Address</label>
+              <input value={form.customer_address} onChange={e => setForm(f => ({ ...f, customer_address: e.target.value }))}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-slate-700">Line Items</h3>
+              <button onClick={addLine} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium">
+                <Plus size={13} /> Add Line
+              </button>
+            </div>
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs text-slate-500 font-medium w-64">Description</th>
+                    <th className="text-right px-3 py-2 text-xs text-slate-500 font-medium w-16">Qty</th>
+                    <th className="text-right px-3 py-2 text-xs text-slate-500 font-medium w-24">Unit Price</th>
+                    <th className="text-right px-3 py-2 text-xs text-slate-500 font-medium w-16">Disc%</th>
+                    <th className="text-right px-3 py-2 text-xs text-slate-500 font-medium w-16">VAT%</th>
+                    <th className="text-right px-3 py-2 text-xs text-slate-500 font-medium w-24">Total</th>
+                    <th className="w-8" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {lines.map((line, idx) => (
+                    <tr key={idx}>
+                      <td className="px-3 py-2">
+                        <select className="w-full text-xs border border-slate-200 rounded px-2 py-1 mb-1"
+                          value={line.product_id ?? ''} onChange={e => selectProduct(idx, e.target.value)}>
+                          <option value="">-- Product --</option>
+                          {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                        <input value={line.description} onChange={e => updateLine(idx, 'description', e.target.value)}
+                          placeholder="Description" className="w-full text-xs border border-slate-200 rounded px-2 py-1" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="number" min="0" step="0.01" value={line.quantity}
+                          onChange={e => updateLine(idx, 'quantity', Number(e.target.value))}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1 text-right" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="number" min="0" step="0.01" value={line.unit_price}
+                          onChange={e => updateLine(idx, 'unit_price', Number(e.target.value))}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1 text-right" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="number" min="0" max="100" step="0.01" value={line.discount_percent}
+                          onChange={e => updateLine(idx, 'discount_percent', Number(e.target.value))}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1 text-right" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="number" min="0" max="100" step="0.01" value={line.vat_rate}
+                          onChange={e => updateLine(idx, 'vat_rate', Number(e.target.value))}
+                          className="w-full text-xs border border-slate-200 rounded px-2 py-1 text-right" />
+                      </td>
+                      <td className="px-3 py-2 text-right text-xs font-medium text-slate-800">
+                        {formatCurrency(line.total)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <button onClick={() => removeLine(idx)} className="text-slate-300 hover:text-red-500 transition-colors">
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end mt-3">
+              <div className="w-56 space-y-1.5 text-sm">
+                <div className="flex justify-between text-slate-600">
+                  <span>Subtotal</span><span className="font-medium">{formatCurrency(subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>VAT (5%)</span><span className="font-medium">{formatCurrency(vatAmount)}</span>
+                </div>
+                <div className="flex justify-between text-slate-800 font-bold text-base border-t border-slate-200 pt-2 mt-2">
+                  <span>Total</span><span>{formatCurrency(total)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+              <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                rows={3} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Terms & Conditions</label>
+              <textarea value={form.terms} onChange={e => setForm(f => ({ ...f, terms: e.target.value }))}
+                rows={3} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-200 flex items-center gap-3">
+          {error && <span className="text-red-600 text-sm flex-1">{error}</span>}
+          <div className="flex gap-3 ml-auto">
+            <button onClick={onClose} className="px-6 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button onClick={handleSave} disabled={saving}
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors">
+              {saving ? 'Saving...' : editing ? 'Update Invoice' : 'Create Invoice'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
