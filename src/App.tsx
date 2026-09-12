@@ -53,6 +53,13 @@ function AppContent() {
   const { canView } = usePermissions();
   const [currentPage, setCurrentPage] = useState('dashboard');
 
+  const isPageAllowed = (page: string) => {
+    const roleList = ROLE_PERMISSIONS[(profile?.role as UserRole) ?? 'sales'];
+    if (!roleList.includes(page)) return false;
+    if (page === 'scanner') return true;
+    return canView(page);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -66,9 +73,8 @@ function AppContent() {
 
   if (!user || !profile) return <LoginPage />;
 
-  const permissions = ROLE_PERMISSIONS[(profile.role as UserRole) ?? 'sales'];
   const navigate = (page: string) => {
-    if (permissions.includes(page) && (canView(page) || page === 'scanner')) setCurrentPage(page);
+    if (isPageAllowed(page)) setCurrentPage(page);
   };
 
   const pageInfo = pageTitles[currentPage] ?? { title: 'Al Luluah ERP', subtitle: '' };
@@ -79,6 +85,10 @@ function AppContent() {
   };
 
   const renderPage = () => {
+    if (!isPageAllowed(currentPage)) {
+      return <Dashboard branchFilter={getBranchFilter()} />;
+    }
+
     switch (currentPage) {
       case 'dashboard': return <Dashboard branchFilter={getBranchFilter()} />;
       case 'reports': return <ReportsPage branchFilter={getBranchFilter()} />;

@@ -4,6 +4,8 @@ import { useAuth } from './AuthContext';
 
 export type PermAction = 'view' | 'create' | 'edit' | 'delete' | 'print' | 'export' | 'approve' | 'reject';
 
+const ADMIN_ONLY_MODULES = new Set(['branches', 'companies', 'settings']);
+
 interface PermissionRow {
   module: string;
   action: PermAction;
@@ -83,9 +85,17 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [profile?.id]);
+  useEffect(() => { load(); }, [profile?.id, profile?.role]);
 
   const can = (module: string, action: PermAction, branchId?: string | null): boolean => {
+    if (!profile) return false;
+
+    // Admin-only modules can never be inherited by non-admin users through
+    // role templates or user-specific permission rows.
+    if (profile.role !== 'admin' && ADMIN_ONLY_MODULES.has(module)) {
+      return false;
+    }
+
     const targetBranch = branchId ?? null;
     // Prefer branch-specific permission, fall back to global (branch_id = null)
     const branchMatch = permissions.find(p =>
