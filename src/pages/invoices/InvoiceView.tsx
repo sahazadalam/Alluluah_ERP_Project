@@ -9,6 +9,243 @@ interface Props {
   onClose: () => void;
 }
 
+function buildInvoicePrintableHtml(inv: Invoice, items: Array<NonNullable<Invoice['items']>[number]>, company: Company | null) {
+  const safeItems = items ?? [];
+  const companyName = company?.name || 'Al Luluah Tents & Sheds';
+  const companyAddress = company?.address || 'Dubai, UAE';
+  const companyTrn = company?.trn || '';
+  const logoUrl = company?.logo_url || '';
+
+  const itemRows = safeItems.length === 0
+    ? `<tr><td colspan="8" class="empty">No items</td></tr>`
+    : safeItems.map((item, i) => `<tr>
+        <td class="idx">${i + 1}</td>
+        <td class="desc">${escapeHtml(item.description)}</td>
+        <td class="qty">${number(item.quantity)}</td>
+        <td class="price">${formatCurrency(item.unit_price)}</td>
+        <td class="disc">${number(item.discount_percent)}%</td>
+        <td class="amount">${formatCurrency(item.line_total)}</td>
+        <td class="vat">${formatCurrency(item.vat_amount)}</td>
+        <td class="total">${formatCurrency(item.total)}</td>
+      </tr>`).join('');
+
+  const paymentRows = (inv.payments ?? []).map((p) => `
+    <div class="payment-history-row">
+      <span>${formatDate(p.payment_date)} — ${escapeHtml(p.payment_method.replace('_', ' '))}${p.reference ? ` (${escapeHtml(p.reference)})` : ''}</span>
+      <span class="history-paid">${formatCurrency(p.amount)}</span>
+    </div>
+  `).join('');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tax Invoice</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    *, *:before, *:after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #1e293b;
+      font-family: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 13px;
+    }
+    .invoice-sheet {
+      width: min(960px, calc(100vw - 40px));
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 26px 40px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.08);
+    }
+    .invoice-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #334155;
+    }
+    .company {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 420px;
+    }
+    .company-logo { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; }
+    .company-logo-fallback { width: 56px; height: 56px; border-radius: 10px; background: #1b7651; color: white; font-size: 26px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+    .company-title { margin: 0 0 4px; font-size: 26px; font-weight: 800; color: #334155; }
+    .company-meta { margin: 0; color: #64748b; font-size: 12px; }
+    .company-trn { margin-top: 4px; color: #64748b; font-size: 12px; }
+    .invoice-id {
+      min-width: 240px;
+      text-align: right;
+    }
+    .tax-title { margin: 0; font-size: 30px; font-weight: 800; color: #334155; text-transform: uppercase; letter-spacing: 0.5px; }
+    .invoice-number { color: #475569; margin-top: 12px; font-size: 13px; }
+    .invoice-number strong { color: #334155; }
+    .bill-grid { display: grid; grid-template-columns: repeat(2, minmax(250px, 1fr)); gap: 16px; margin-top: 16px; }
+    .bill-card { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 16px; }
+    .bill-card.payment { background: #eef2ff; border-color: #a5b4fc; }
+    .label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 10px; }
+    .bill-card.payment .label { color: #475569; }
+    .customer-name { font-size: 19px; font-weight: 800; color: #334155; margin-bottom: 8px; }
+    .customer-address { color: #64748b; margin: 2px 0; }
+    .summary { display: grid; gap: 8px; color: #475569; font-size: 12px; }
+    .summary-row { display: flex; align-items: center; justify-content: space-between; }
+    .summary-row .name { flex: 1; }
+    .summary-row .amount { font-weight: 800; color: #334155; }
+    .summary-row.amount-paid .amount { color: #0b8a4b; }
+    .summary-row.balance-due .amount { color: #dc2626; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 12px;
+    }
+    thead tr { background: #1e293b; color: white; }
+    th {
+      padding: 11px 10px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    th:nth-child(2) { width: 26%; }
+    th:nth-child(3), th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7), th:nth-child(8) { text-align: right; white-space: nowrap; }
+    td {
+      padding: 10px;
+      border-bottom: 1px solid #e2e8f0;
+      color: #334155;
+      text-align: left;
+    }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody tr:nth-child(odd) { background: #ffffff; }
+    .idx { color: #64748b; font-weight: 700; width: 34px; }
+    .desc { font-weight: 700; color: #334155; }
+    .qty, .price, .disc, .amount, .vat, .total { text-align: right; white-space: nowrap; }
+    .total { font-weight: 800; color: #111827; }
+    .empty { text-align: center; color: #64748b; padding: 14px; font-style: italic; }
+    .totals { margin-top: 16px; display: flex; justify-content: flex-end; }
+    .totals-panel { width: min(300px, 100%); }
+    .totals-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 12px; }
+    .totals-row.total-main { font-size: 18px; font-weight: 800; color: #111827; border-bottom: 2px solid #334155; padding: 11px 0; }
+    .totals-row.total-main span:last-child { color: #111827; }
+    .totals-row.total-main span:first-child { color: #111827; }
+    .payment-history { margin-top: 16px; border: 1px solid #cbd5e1; border-radius: 10px; background: #f8fafc; overflow: hidden; }
+    .history-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 0 0 10px; }
+    .payment-history-row { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding: 11px 14px; font-size: 12px; color: #475569; }
+    .payment-history-row:last-child { border-bottom: none; }
+    .history-paid { color: #0b8a4b; font-weight: 800; }
+    .terms { border-top: 1px solid #e2e8f0; margin-top: 20px; padding-top: 14px; font-size: 12px; color: #475569; }
+    .terms-title { font-weight: 800; color: #64748b; text-transform: uppercase; font-size: 11px; margin-bottom: 8px; }
+    .terms-text { margin: 0; }
+    .signatures { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 18px; border-top: 1px solid #e2e8f0; margin-top: 18px; padding-top: 16px; font-size: 12px; color: #64748b; }
+    .signature-line { border-top: 1px solid #94a3b8; padding-top: 12px; margin-top: 32px; color: #334155; font-weight: 700; }
+    .footer-note { border-top: 1px solid #e2e8f0; margin-top: 22px; padding-top: 12px; color: #94a3b8; font-size: 11px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="invoice-sheet">
+    <section class="invoice-head">
+      <div class="company">
+        ${logoUrl ? `<img class="company-logo" src="${logoUrl}" alt="${companyName}" />` : `<div class="company-logo-fallback">${companyName.charAt(0)}</div>`}
+        <div>
+          <div class="company-title">${companyName}</div>
+          <p class="company-meta">${companyAddress}</p>
+          <div class="company-trn">TRN: ${companyTrn}</div>
+        </div>
+      </div>
+      <div class="invoice-id">
+        <div class="tax-title">TAX INVOICE</div>
+        <div class="invoice-number"><strong>Invoice #:</strong> ${escapeHtml(inv.invoice_number)}</div>
+        <div class="invoice-number"><strong>Date:</strong> ${formatDate(inv.issue_date)}</div>
+        ${inv.due_date ? `<div class="invoice-number"><strong>Due:</strong> ${formatDate(inv.due_date)}</div>` : ''}
+      </div>
+    </section>
+
+    <section class="bill-grid">
+      <div class="bill-card">
+        <div class="label">Bill To</div>
+        <div class="customer-name">${escapeHtml(inv.customer_name)}</div>
+        ${inv.customer_address ? `<div class="customer-address">${escapeHtml(inv.customer_address)}</div>` : ''}
+        ${inv.customer_trn ? `<div class="customer-address">TRN: ${escapeHtml(inv.customer_trn)}</div>` : ''}
+      </div>
+      <div class="bill-card payment">
+        <div class="label">Payment Summary</div>
+        <div class="summary">
+          <div class="summary-row"><span class="name">Invoice Total:</span><span class="amount">${formatCurrency(inv.total)}</span></div>
+          <div class="summary-row amount-paid"><span class="name">Amount Paid:</span><span class="amount">${formatCurrency(inv.paid_amount)}</span></div>
+          <div class="summary-row balance-due"><span class="name">Balance Due:</span><span class="amount">${formatCurrency(inv.balance_due)}</span></div>
+        </div>
+      </div>
+    </section>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Description</th>
+          <th>Qty</th>
+          <th>Unit Price</th>
+          <th>Disc%</th>
+          <th>Amount</th>
+          <th>VAT 5%</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>${itemRows}</tbody>
+    </table>
+
+    <section class="totals">
+      <div class="totals-panel">
+        <div class="totals-row"><span>Subtotal (excl. VAT)</span><span>${formatCurrency(inv.subtotal)}</span></div>
+        <div class="totals-row"><span>VAT @ 5%</span><span>${formatCurrency(inv.vat_amount)}</span></div>
+        <div class="totals-row total-main"><span>Total (AED)</span><span>${formatCurrency(inv.total)}</span></div>
+        <div class="totals-row"><span>Amount Paid</span><span>${formatCurrency(inv.paid_amount)}</span></div>
+        <div class="totals-row"><span>Balance Due (AED)</span><span>${formatCurrency(inv.balance_due)}</span></div>
+      </div>
+    </section>
+
+    ${(inv.payments && inv.payments.length > 0) ? `<section class="payment-history">
+      <div class="history-title">Payment History</div>
+      ${paymentRows}
+    </section>` : ''}
+
+    ${(inv.notes || inv.terms) ? `<section class="terms">
+      <div class="terms-title">Terms & Conditions</div>
+      <p class="terms-text">${escapeHtml(inv.terms || '')}</p>
+    </section>` : ''}
+
+    <section class="signatures">
+      <div>
+        <div class="signature-title">Authorized Signature</div>
+        <div class="signature-line">${companyName}</div>
+      </div>
+      <div>
+        <div class="signature-title">Customer Acceptance</div>
+        <div class="signature-line">Date & Signature</div>
+      </div>
+    </section>
+
+    <div class="footer-note">Computer-generated invoice · ${companyName} — ${companyAddress}</div>
+  </div>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string | number | null | undefined) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function number(value: number) {
+  return Number.isInteger(value) ? value : Number(value).toFixed(2);
+}
+
 export default function InvoiceView({ invoice: inv, onClose }: Props) {
   const [company, setCompany] = useState<Company | null>(null);
   const items = inv.items ?? [];
@@ -21,24 +258,28 @@ export default function InvoiceView({ invoice: inv, onClose }: Props) {
 
   const handlePrint = () => {
     if (!hasItems) return;
-    window.print();
+
+    const printWindow = window.open('', '_blank', 'width=980,height=900');
+    if (!printWindow) {
+      return;
+    }
+
+    printWindow.document.open();
+    printWindow.document.write(buildInvoicePrintableHtml(inv, items, company));
+    printWindow.document.close();
+    printWindow.focus();
+
+    setTimeout(() => {
+      try {
+        printWindow.print();
+      } catch {
+        // Ignore browser blocked print handling
+      }
+    }, 250);
   };
 
   return (
     <>
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          #inv-print-area, #inv-print-area * { visibility: visible !important; }
-          #inv-print-area {
-            position: fixed !important;
-            top: 0 !important; left: 0 !important;
-            width: 100% !important;
-            padding: 15mm 15mm !important;
-            background: white !important;
-          }
-        }
-      `}</style>
 
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div className="fixed inset-0 bg-black/50 print:hidden" onClick={onClose} />
@@ -67,7 +308,7 @@ export default function InvoiceView({ invoice: inv, onClose }: Props) {
         </div>
       </div>
 
-      <div id="inv-print-area" style={{ display: 'none' }} className="print:block bg-white">
+      <div id="inv-print-area" className="hidden print:block bg-white">
         <InvoiceDocument inv={inv} items={items} company={company} />
       </div>
     </>

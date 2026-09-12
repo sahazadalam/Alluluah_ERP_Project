@@ -33,24 +33,47 @@ export default function QuotationView({ quotation: q, onClose }: Props) {
 
   const handlePrint = () => {
     if (!hasItems) return;
-    window.print();
+
+    const printArea = document.getElementById('qt-print-area');
+    if (!printArea) {
+      window.print();
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=900,height=900');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const html = printArea.innerHTML;
+    printWindow.document.open();
+    printWindow.document.write(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quotation</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    body { margin: 0; background: #fff; color: #0f172a; font-family: Inter, Arial, Helvetica, sans-serif; }
+    .quotation-window { min-height: 100vh; padding: 0; background: #fff; }
+    .quotation-window table { border-collapse: collapse; width: 100%; }
+    .quotation-window th, .quotation-window td { border: none; }
+    .quotation-window .font-sans { font-family: Inter, Arial, Helvetica, sans-serif; }
+  </style>
+</head>
+<body>
+  <div class="quotation-window">${html}</div>
+</body>
+</html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 250);
   };
 
   return (
     <>
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          #qt-print-area, #qt-print-area * { visibility: visible !important; }
-          #qt-print-area {
-            position: fixed !important;
-            top: 0 !important; left: 0 !important;
-            width: 100% !important;
-            padding: 15mm 15mm !important;
-            background: white !important;
-          }
-        }
-      `}</style>
 
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div className="fixed inset-0 bg-black/50 print:hidden" onClick={onClose} />
@@ -105,7 +128,7 @@ export default function QuotationView({ quotation: q, onClose }: Props) {
         </div>
       </div>
 
-      <div id="qt-print-area" style={{ display: 'none' }} className="print:block bg-white">
+      <div id="qt-print-area" className="hidden print:block bg-white">
         <QuotationPrintDocument q={q} items={items} company={company} />
       </div>
     </>
