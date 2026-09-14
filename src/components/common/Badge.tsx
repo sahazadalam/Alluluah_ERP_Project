@@ -44,6 +44,7 @@ export const statusBadge = (status: string) => {
     completed: { label: 'Completed', color: 'green' },
     voided: { label: 'Voided', color: 'red' },
     refunded: { label: 'Refunded', color: 'orange' },
+    returned: { label: 'Returned', color: 'orange' },
   };
   const config = map[status] ?? { label: status, color: 'gray' as const };
   return <Badge label={config.label} color={config.color} />;

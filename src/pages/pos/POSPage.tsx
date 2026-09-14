@@ -252,6 +252,7 @@ export default function POSPage({ branchFilter }: Props) {
     const { data: session, error } = await supabase.from('pos_sessions')
       .select('*')
       .eq('cashier_id', activeCashierId)
+      .eq('branch_id', branchId)
       .eq('status', 'open')
       .order('opened_at', { ascending: false })
       .limit(1)
@@ -709,7 +710,7 @@ export default function POSPage({ branchFilter }: Props) {
     const { data: tx, error: txErr } = await supabase.from('pos_transactions').insert({
       transaction_number: txNum,
       session_id: sessionId,
-      shift_id: shiftId,
+      shift_id: sessionId,
       cashier_id: activeCashierId,
       cashier_name: activeCashierName,
       branch_id: branchId,
@@ -857,7 +858,7 @@ export default function POSPage({ branchFilter }: Props) {
     const { data: retTx, error: retErr } = await supabase.from('pos_transactions').insert({
       transaction_number: returnNum,
       session_id: sessionId,
-      shift_id: shiftId,
+      shift_id: sessionId,
       cashier_id: activeCashierId,
       cashier_name: activeCashierName,
       branch_id: branchId,

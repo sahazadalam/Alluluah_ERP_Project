@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
+import { ROLE_PERMISSIONS, UserRole } from '../lib/types';
 import { useAuth } from './AuthContext';
 
 export type PermAction = 'view' | 'create' | 'edit' | 'delete' | 'print' | 'export' | 'approve' | 'reject';
@@ -96,16 +97,41 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
+    const roleModules = ROLE_PERMISSIONS[(profile.role as UserRole) ?? 'sales'] ?? [];
     const targetBranch = branchId ?? null;
-    // Prefer branch-specific permission, fall back to global (branch_id = null)
+
+    // Prefer branch-specific permission, fall back to global (branch_id = null).
+    // However, if the template row exists with a false grant, do not let that
+    // false row hide the module when the static role matrix says that the user
+    // role is supposed to see the page.
     const branchMatch = permissions.find(p =>
       p.module === module && p.action === action && p.branch_id === targetBranch
     );
-    if (branchMatch) return branchMatch.granted;
+    if (branchMatch) {
+      if (branchMatch.granted) return true;
+      if (action === 'view' && roleModules.includes(module)) return true;
+      return false;
+    }
+
     const globalMatch = permissions.find(p =>
       p.module === module && p.action === action && p.branch_id === null
     );
-    return globalMatch?.granted ?? false;
+    if (globalMatch) {
+      if (globalMatch.granted) return true;
+      if (action === 'view' && roleModules.includes(module)) return true;
+      return false;
+    }
+
+    // Fallback for role-template drift: if the template table is missing the
+    // explicit row for a role/module 'view' action, the static role list should
+    // still let the user access the pages that the product role matrix allows.
+    // This keeps HR/accounting/other business windows visible instead of hiding
+    // them behind a missing permission row in the database.
+    if (action === 'view' && roleModules.includes(module)) {
+      return true;
+    }
+
+    return false;
   };
 
   const canView = (module: string) => can(module, 'view');

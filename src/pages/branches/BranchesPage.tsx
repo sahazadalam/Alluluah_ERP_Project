@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Branch } from '../../lib/types';
 import Modal from '../../components/common/Modal';
+import { useAuth } from '../../context/AuthContext';
 import { Plus, Edit2, Trash2, Building, MapPin, Phone, Mail, Star } from 'lucide-react';
 
 const emptyBranch = {
@@ -14,6 +15,7 @@ const defaultCompanyId = async () => {
 };
 
 export default function BranchesPage() {
+  const { profile, refreshProfile } = useAuth();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -35,7 +37,8 @@ export default function BranchesPage() {
     if (!confirm('Are you sure you want to delete this branch?')) return;
     const { error } = await supabase.from('branches').delete().eq('id', id);
     if (error) { setError(error.message); return; }
-    loadBranches();
+    await loadBranches();
+    await refreshProfile();
   };
 
   const openAdd = () => { setEditing(null); setForm(emptyBranch); setError(''); setShowModal(true); };
@@ -46,18 +49,19 @@ export default function BranchesPage() {
     setSaving(true);
     setError('');
 
-    const companyId = await defaultCompanyId();
+    const resolvedCompanyId = editing?.company_id ?? form.company_id ?? profile?.company_id ?? await defaultCompanyId();
 
     if (editing) {
-      const { error } = await supabase.from('branches').update({ ...form, company_id: editing.company_id }).eq('id', editing.id);
+      const { error } = await supabase.from('branches').update({ ...form, company_id: resolvedCompanyId }).eq('id', editing.id);
       if (error) { setError(error.message); setSaving(false); return; }
     } else {
-      const { error } = await supabase.from('branches').insert({ ...form, company_id: companyId });
+      const { error } = await supabase.from('branches').insert({ ...form, company_id: resolvedCompanyId });
       if (error) { setError(error.message); setSaving(false); return; }
     }
     setSaving(false);
     setShowModal(false);
-    loadBranches();
+    await loadBranches();
+    await refreshProfile();
   };
 
   return (

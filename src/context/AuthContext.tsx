@@ -46,7 +46,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (profileData?.role === 'admin') {
       const { data: branchData } = await supabase.from('branches').select('*').eq('is_active', true).order('name');
-      setBranches(branchData ?? []);
+      const branchesList = branchData ?? [];
+      setBranches(branchesList);
+      const defaultBranch = branchesList.find(b => b.is_head_office) ?? branchesList[0] ?? null;
+      setCurrentBranch(defaultBranch);
     } else if (profileData?.branch_id) {
       const { data: branchData } = await supabase.from('branches').select('*').eq('id', profileData.branch_id).maybeSingle();
       setBranches(branchData ? [branchData] : []);

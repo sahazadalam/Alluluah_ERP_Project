@@ -366,7 +366,7 @@ export interface POSTransaction {
   payment_method: 'cash' | 'card' | 'bank_transfer';
   amount_tendered: number;
   change_due: number;
-  status: 'completed' | 'voided' | 'refunded';
+  status: 'completed' | 'voided' | 'refunded' | 'returned';
   branch_id: string | null;
   created_by: string | null;
   created_at: string;

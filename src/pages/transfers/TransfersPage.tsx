@@ -74,37 +74,59 @@ export default function TransfersPage({ branchFilter }: Props) {
     if (status === 'shipped') { updates.shipped_by = profile?.id; updates.shipped_at = new Date().toISOString(); }
     if (status === 'received') { updates.received_by = profile?.id; updates.received_at = new Date().toISOString(); }
     if (status === 'rejected') { updates.approved_by = profile?.id; updates.approved_at = new Date().toISOString(); }
+    if (status === 'cancelled') { updates.notes = `${t.notes ?? ''}${t.notes ? '\n' : ''}Cancelled by ${profile?.full_name ?? 'system'}`; }
 
     const { error: statusErr } = await supabase.from('stock_transfers').update(updates).eq('id', t.id);
     if (statusErr) { setError('Failed to update status: ' + statusErr.message); return; }
 
-    // If received, update branch inventory — need to fetch items first
+    if (status === 'shipped') {
+      const { data: transferItems, error: itemsErr } = await supabase
+        .from('stock_transfer_items').select('*').eq('transfer_id', t.id);
+      if (itemsErr) { setError('Failed to load transfer items: ' + itemsErr.message); return; }
+      if (transferItems?.length) {
+        const shippedRows = transferItems.map(item => ({
+          id: item.id,
+          quantity_shipped: Math.max(item.quantity_requested ?? 0, item.quantity_shipped ?? 0),
+        }));
+        const { error: itemUpdateErr } = await supabase.from('stock_transfer_items').upsert(shippedRows);
+        if (itemUpdateErr) { setError('Failed to update shipped quantities: ' + itemUpdateErr.message); return; }
+      }
+    }
+
     if (status === 'received') {
       const { data: transferItems, error: itemsErr } = await supabase
         .from('stock_transfer_items').select('*').eq('transfer_id', t.id);
       if (itemsErr || !transferItems) { setError('Failed to load transfer items for inventory update: ' + (itemsErr?.message ?? 'no data')); return; }
 
       for (const item of transferItems) {
-        // Add to receiving branch
+        const qtyReceived = Math.max(0, Number(item.quantity_received ?? 0));
+        const qtyToReceive = Math.max(0, Number(item.quantity_requested ?? 0));
+        const quantity = Math.max(qtyReceived, qtyToReceive);
+
         const { data: existing } = await supabase.from('branch_inventory').select('*')
           .eq('branch_id', t.to_branch_id).eq('product_id', item.product_id).maybeSingle();
         if (existing) {
           const { error: updErr } = await supabase.from('branch_inventory')
-            .update({ quantity: existing.quantity + item.quantity_received }).eq('id', existing.id);
+            .update({ quantity: existing.quantity + quantity }).eq('id', existing.id);
           if (updErr) { setError('Failed to update receiving branch inventory: ' + updErr.message); return; }
         } else {
           const { error: insErr } = await supabase.from('branch_inventory')
-            .insert({ branch_id: t.to_branch_id, product_id: item.product_id, quantity: item.quantity_received });
+            .insert({ branch_id: t.to_branch_id, product_id: item.product_id, quantity });
           if (insErr) { setError('Failed to create receiving branch inventory: ' + insErr.message); return; }
         }
-        // Remove from sending branch
+
         const { data: fromExisting } = await supabase.from('branch_inventory').select('*')
           .eq('branch_id', t.from_branch_id).eq('product_id', item.product_id).maybeSingle();
         if (fromExisting) {
           const { error: fromUpdErr } = await supabase.from('branch_inventory')
-            .update({ quantity: fromExisting.quantity - item.quantity_shipped }).eq('id', fromExisting.id);
+            .update({ quantity: fromExisting.quantity - Math.max(0, Number(item.quantity_shipped ?? item.quantity_requested ?? 0)) }).eq('id', fromExisting.id);
           if (fromUpdErr) { setError('Failed to update sending branch inventory: ' + fromUpdErr.message); return; }
         }
+
+        const { error: itemQtyErr } = await supabase.from('stock_transfer_items')
+          .update({ quantity_received: quantity })
+          .eq('id', item.id);
+        if (itemQtyErr) { setError('Failed to update received quantity: ' + itemQtyErr.message); return; }
       }
     }
 
@@ -217,26 +239,67 @@ export default function TransfersPage({ branchFilter }: Props) {
                       <button onClick={() => openView(t)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
                         <Eye size={14} />
                       </button>
-                      {t.status === 'requested' && isGlobalAdmin && (
+
+                      {t.status === 'requested' && (
                         <>
-                          <button onClick={() => updateStatus(t, 'approved')} className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg" title="Approve">
-                            <Check size={14} />
-                          </button>
-                          <button onClick={() => updateStatus(t, 'rejected')} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Reject">
-                            <X size={14} />
+                          {(isGlobalAdmin || profile?.branch_id === t.from_branch_id) && (
+                            <button onClick={() => updateStatus(t, 'approved')} className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg" title="Approve">
+                              <Check size={14} />
+                            </button>
+                          )}
+                          {(isGlobalAdmin || profile?.branch_id === t.from_branch_id) && (
+                            <button onClick={() => updateStatus(t, 'rejected')} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Reject">
+                              <X size={14} />
+                            </button>
+                          )}
+                          <button onClick={() => updateStatus(t, 'cancelled')} className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Cancel">
+                            <Trash2 size={14} />
                           </button>
                         </>
                       )}
-                      {t.status === 'approved' && (isGlobalAdmin || profile?.branch_id === t.from_branch_id) && (
-                        <button onClick={() => updateStatus(t, 'shipped')} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="Mark Shipped">
-                          <Truck size={14} />
+
+                      {t.status === 'approved' && (
+                        <>
+                          {(isGlobalAdmin || profile?.branch_id === t.from_branch_id) && (
+                            <button onClick={() => updateStatus(t, 'shipped')} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" title="Mark Shipped">
+                              <Truck size={14} />
+                            </button>
+                          )}
+                          <button onClick={() => updateStatus(t, 'cancelled')} className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Cancel">
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
+
+                      {t.status === 'rejected' && (
+                        <button onClick={() => updateStatus(t, 'cancelled')} className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Cancel">
+                          <Trash2 size={14} />
                         </button>
                       )}
-                      {t.status === 'shipped' && (isGlobalAdmin || profile?.branch_id === t.to_branch_id) && (
-                        <button onClick={() => updateStatus(t, 'received')} className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg" title="Mark Received">
-                          <Check size={14} />
+
+                      {t.status === 'shipped' && (
+                        <>
+                          {(isGlobalAdmin || profile?.branch_id === t.to_branch_id) && (
+                            <button onClick={() => updateStatus(t, 'received')} className="p-1.5 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg" title="Mark Received">
+                              <Check size={14} />
+                            </button>
+                          )}
+                          <button onClick={() => updateStatus(t, 'cancelled')} className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Cancel">
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
+
+                      {t.status === 'received' && (
+                        <button onClick={() => updateStatus(t, 'cancelled')} className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Cancel">
+                          <Trash2 size={14} />
                         </button>
                       )}
+
+                      {t.status === 'cancelled' && (
+                        <span className="text-xs text-slate-500">Closed</span>
+                      )}
+
                       <button onClick={() => deleteTransfer(t)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete">
                         <Trash2 size={14} />
                       </button>

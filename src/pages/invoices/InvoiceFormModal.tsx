@@ -37,7 +37,7 @@ const calcLine = (l: LineItem): LineItem => {
 };
 
 export default function InvoiceFormModal({ editing, onClose, onSaved }: Props) {
-  const { profile } = useAuth();
+  const { profile, currentBranch } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [form, setForm] = useState({
@@ -115,9 +115,11 @@ export default function InvoiceFormModal({ editing, onClose, onSaved }: Props) {
       invoiceNumber = `INV-${ts}`;
     }
 
+    const branchId = editing?.branch_id ?? currentBranch?.id ?? profile?.branch_id ?? null;
+
     const payload = {
       ...form, invoice_number: invoiceNumber,
-      branch_id: editing?.branch_id ?? profile?.branch_id,
+      branch_id: branchId,
       subtotal, discount_amount: 0, vat_rate: 5, vat_amount: vatAmount, total,
       balance_due: editing?.balance_due ?? total,
       paid_amount: editing?.paid_amount ?? 0,

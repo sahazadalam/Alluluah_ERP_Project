@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import {
-  Employee, PayrollPeriod, PayrollItem, SalaryAdvance,
+  Company, Employee, PayrollPeriod, PayrollItem, SalaryAdvance,
   EmployeeDeduction, PayrollAuditLog, formatDate
 } from '../../lib/types';
 import Modal from '../../components/common/Modal';
@@ -303,71 +303,120 @@ export default function PayrollPage({ branchFilter }: Props) {
     loadAll();
   };
 
-  const printPayslip = (item: PayrollItem) => {
+  const printPayslip = async (item: PayrollItem) => {
     const emp = item.employee as Employee | undefined;
     const period = selectedPeriod;
-    const win = window.open('', '_blank', 'width=800,height=600');
+
+    const escapeHtml = (value: string | number | null | undefined) => String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    let company: Company | null = null;
+    const activeCompanyId = branchFilter || profile?.company_id;
+    if (branchFilter) {
+      const { data: branch, error: branchErr } = await supabase.from('branches').select('company_id').eq('id', branchFilter).maybeSingle();
+      const resolvedCompanyId = branch?.company_id ?? profile?.company_id ?? activeCompanyId;
+      if (!branchErr && resolvedCompanyId) {
+        const { data: c } = await supabase.from('companies').select('*').eq('id', resolvedCompanyId).maybeSingle();
+        if (c) company = c as Company;
+      }
+    } else if (profile?.company_id) {
+      const { data: c } = await supabase.from('companies').select('*').eq('id', profile.company_id).maybeSingle();
+      if (c) company = c as Company;
+    }
+
+    const companyName = company?.name ?? 'Al Luluah Tents & Sheds TR.';
+    const companyLegalName = company?.legal_name ?? companyName;
+    const companyAddress = company?.address ?? 'Company address';
+    const companyPhone = company?.phone ?? '';
+    const companyEmail = company?.email ?? '';
+    const companyWebsite = company?.website ?? '';
+    const logoUrl = company?.logo_url ?? '';
+    const logoHtml = logoUrl
+      ? `<img class="company-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(companyName)}" />`
+      : `<div class="company-logo-fallback">${escapeHtml(companyName.charAt(0) || 'A')}</div>`;
+
+    const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) return;
+
     win.document.write(`
       <html><head><title>Payslip</title>
       <style>
-        body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1a1a1a}
-        .header{background:#0B6B3A;color:white;padding:20px;border-radius:8px;margin-bottom:20px}
+        body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1a1a1a;background:#fff}
+        .header{background:#0B6B3A;color:white;padding:20px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+        .header-left{display:flex;flex-direction:column}
         .header h1{margin:0;font-size:20px}.header p{margin:4px 0 0;font-size:13px;opacity:.85}
-        .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+        .company-logo{width:56px;height:56px;object-fit:contain;border-radius:10px;background:white;padding:4px}
+        .company-logo-fallback{width:56px;height:56px;border-radius:10px;background:#ffffff;color:#0B6B3A;font-size:26px;font-weight:800;display:flex;align-items:center;justify-content:center}
+        .company-details{margin:2px 0 0;font-size:11px;opacity:.86;line-height:1.4}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
         .card{background:#f0faf4;padding:14px;border-radius:8px}
         .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;color:#0B6B3A;letter-spacing:.05em}
         .row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #e8f5ee;font-size:13px}
+        .row span:first-child{color:#667085}
+        .row span:last-child{font-weight:600;color:#1f2937;text-align:right}
         .total{font-weight:bold;font-size:15px;color:#0B6B3A;border-top:2px solid #0B6B3A;padding-top:8px}
         .net{background:#0B6B3A;color:white;padding:14px;border-radius:8px;text-align:center;margin-top:16px}
         .net h2{margin:0;font-size:24px}.net p{margin:4px 0 0;font-size:12px;opacity:.8}
-        @media print{body{padding:0}}
+        @media print{body{padding:0}.header{border-radius:0}.company-logo{max-height:56px}}
       </style></head><body>
       <div class="header">
-        <h1>Al Luluah Tents &amp; Sheds TR.</h1>
-        <p>PAYSLIP &mdash; ${period?.period_name ?? ''}</p>
+        <div class="header-left">
+          <h1>${escapeHtml(companyName)}</h1>
+          <p>PAYSLIP &mdash; ${escapeHtml(period?.period_name ?? '')}</p>
+          <div class="company-details">
+            ${escapeHtml(companyLegalName)}<br/>
+            ${escapeHtml(companyAddress)}<br/>
+            ${escapeHtml(companyPhone)}${companyPhone && companyEmail ? ' · ' : ''}${escapeHtml(companyEmail)}<br/>
+            ${escapeHtml(companyWebsite)}
+          </div>
+        </div>
+        ${logoHtml}
       </div>
       <div class="grid">
         <div class="card">
           <h3>Employee</h3>
-          <div class="row"><span>Name</span><span>${emp?.full_name ?? ''}</span></div>
-          <div class="row"><span>ID</span><span>${emp?.employee_id ?? ''}</span></div>
-          <div class="row"><span>Position</span><span>${emp?.position ?? ''}</span></div>
-          <div class="row"><span>Bank</span><span>${emp?.bank_name ?? '&mdash;'}</span></div>
-          <div class="row"><span>IBAN</span><span>${emp?.iban ?? '&mdash;'}</span></div>
+          <div class="row"><span>Name</span><span>${escapeHtml(emp?.full_name ?? '')}</span></div>
+          <div class="row"><span>ID</span><span>${escapeHtml(emp?.employee_id ?? '')}</span></div>
+          <div class="row"><span>Position</span><span>${escapeHtml(emp?.position ?? '')}</span></div>
+          <div class="row"><span>Bank</span><span>${escapeHtml(emp?.bank_name ?? '&mdash;')}</span></div>
+          <div class="row"><span>IBAN</span><span>${escapeHtml(emp?.iban ?? '&mdash;')}</span></div>
         </div>
         <div class="card">
           <h3>Period Details</h3>
-          <div class="row"><span>Month</span><span>${period?.period_name ?? ''}</span></div>
-          <div class="row"><span>Days Worked</span><span>${item.days_worked}</span></div>
-          <div class="row"><span>Days Absent</span><span>${item.days_absent}</span></div>
-          <div class="row"><span>OT Hours</span><span>${item.overtime_hours}</span></div>
-          <div class="row"><span>Status</span><span>${item.status.toUpperCase()}</span></div>
+          <div class="row"><span>Month</span><span>${escapeHtml(period?.period_name ?? '')}</span></div>
+          <div class="row"><span>Days Worked</span><span>${escapeHtml(item.days_worked)}</span></div>
+          <div class="row"><span>Days Absent</span><span>${escapeHtml(item.days_absent)}</span></div>
+          <div class="row"><span>OT Hours</span><span>${escapeHtml(item.overtime_hours)}</span></div>
+          <div class="row"><span>Status</span><span>${escapeHtml(item.status.toUpperCase())}</span></div>
         </div>
       </div>
       <div class="grid">
         <div class="card">
           <h3>Earnings</h3>
-          <div class="row"><span>Basic Salary</span><span>AED ${item.basic_salary.toFixed(2)}</span></div>
-          <div class="row"><span>Housing Allowance</span><span>AED ${item.housing_allowance.toFixed(2)}</span></div>
-          <div class="row"><span>Transport Allowance</span><span>AED ${item.transport_allowance.toFixed(2)}</span></div>
-          <div class="row"><span>Other Allowances</span><span>AED ${item.other_allowances.toFixed(2)}</span></div>
-          <div class="row"><span>Overtime (${item.overtime_hours}h @ AED${item.overtime_rate})</span><span>AED ${item.overtime_amount.toFixed(2)}</span></div>
-          <div class="row"><span>Bonus</span><span>AED ${item.bonus.toFixed(2)}</span></div>
-          <div class="row total"><span>Gross Salary</span><span>AED ${item.gross_salary.toFixed(2)}</span></div>
+          <div class="row"><span>Basic Salary</span><span>AED ${escapeHtml(item.basic_salary.toFixed(2))}</span></div>
+          <div class="row"><span>Housing Allowance</span><span>AED ${escapeHtml(item.housing_allowance.toFixed(2))}</span></div>
+          <div class="row"><span>Transport Allowance</span><span>AED ${escapeHtml(item.transport_allowance.toFixed(2))}</span></div>
+          <div class="row"><span>Other Allowances</span><span>AED ${escapeHtml(item.other_allowances.toFixed(2))}</span></div>
+          <div class="row"><span>Overtime (${escapeHtml(item.overtime_hours)}h @ AED${escapeHtml(item.overtime_rate)})</span><span>AED ${escapeHtml(item.overtime_amount.toFixed(2))}</span></div>
+          <div class="row"><span>Bonus</span><span>AED ${escapeHtml(item.bonus.toFixed(2))}</span></div>
+          <div class="row total"><span>Gross Salary</span><span>AED ${escapeHtml(item.gross_salary.toFixed(2))}</span></div>
         </div>
         <div class="card">
           <h3>Deductions</h3>
-          <div class="row"><span>Advance Deduction</span><span>AED ${item.advance_deduction.toFixed(2)}</span></div>
-          <div class="row"><span>Absence Deduction</span><span>AED ${item.absence_deduction.toFixed(2)}</span></div>
-          <div class="row"><span>Other Deductions</span><span>AED ${item.other_deductions.toFixed(2)}</span></div>
-          <div class="row total"><span>Total Deductions</span><span>AED ${item.total_deductions.toFixed(2)}</span></div>
+          <div class="row"><span>Advance Deduction</span><span>AED ${escapeHtml(item.advance_deduction.toFixed(2))}</span></div>
+          <div class="row"><span>Absence Deduction</span><span>AED ${escapeHtml(item.absence_deduction.toFixed(2))}</span></div>
+          <div class="row"><span>Other Deductions</span><span>AED ${escapeHtml(item.other_deductions.toFixed(2))}</span></div>
+          <div class="row total"><span>Total Deductions</span><span>AED ${escapeHtml(item.total_deductions.toFixed(2))}</span></div>
         </div>
       </div>
       <div class="net">
         <p>Net Salary</p>
-        <h2>AED ${item.net_salary.toFixed(2)}</h2>
-        <p>Al Luluah ERP &bull; ${new Date().toLocaleDateString()}</p>
+        <h2>AED ${escapeHtml(item.net_salary.toFixed(2))}</h2>
+        <p>${escapeHtml(companyName)} &bull; ${new Date().toLocaleDateString()}</p>
       </div>
       </body></html>
     `);

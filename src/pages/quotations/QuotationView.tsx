@@ -4,6 +4,203 @@ import { Quotation, QuotationDocument, Company } from '../../lib/types';
 import { formatCurrency, formatDate } from '../../lib/types';
 import { Printer, X, AlertCircle, FileText, Image, Download } from 'lucide-react';
 
+function escapeHtml(value: string | number | null | undefined) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function buildQuotationPrintableHtml(q: Quotation, items: Array<NonNullable<Quotation['items']>[number]>, company: Company | null) {
+  const safeItems = items ?? [];
+  const companyName = company?.name || 'Al Luluah Tents & Sheds';
+  const companyAddress = company?.address || 'Dubai, UAE';
+  const companyTrn = company?.trn || '';
+  const companyPhone = company?.phone || '';
+  const logoUrl = company?.logo_url || '';
+
+  const itemRows = safeItems.length === 0
+    ? `<tr><td colspan="7" class="empty">No items</td></tr>`
+    : safeItems.map((item, i) => `<tr>
+        <td class="idx">${i + 1}</td>
+        <td class="desc">${escapeHtml(item.description)}</td>
+        <td class="qty">${number(item.quantity)}</td>
+        <td class="price">${formatCurrency(item.unit_price)}</td>
+        <td class="disc">${number(item.discount_percent)}%</td>
+        <td class="vat">${formatCurrency(item.vat_amount)}</td>
+        <td class="total">${formatCurrency(item.total)}</td>
+      </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quotation</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    *, *:before, *:after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #1e293b;
+      font-family: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 13px;
+    }
+    .quotation-sheet {
+      width: min(960px, calc(100vw - 40px));
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 26px 40px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.08);
+    }
+    .quotation-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #334155;
+    }
+    .company {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 420px;
+    }
+    .company-logo { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; }
+    .company-logo-fallback { width: 56px; height: 56px; border-radius: 10px; background: #1b7651; color: white; font-size: 26px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+    .company-title { margin: 0 0 4px; font-size: 26px; font-weight: 800; color: #334155; }
+    .company-meta { margin: 0; color: #64748b; font-size: 12px; }
+    .company-trn { margin-top: 4px; color: #64748b; font-size: 12px; }
+    .quote-id { min-width: 260px; text-align: right; }
+    .quote-title { margin: 0; font-size: 30px; font-weight: 800; color: #334155; text-transform: uppercase; letter-spacing: 0.5px; }
+    .quote-number { color: #475569; margin-top: 12px; font-size: 13px; }
+    .quote-number strong { color: #334155; }
+    .prepared-card { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 16px; margin-top: 16px; }
+    .label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 10px; }
+    .prepared-customer { font-size: 18px; font-weight: 800; color: #334155; margin-bottom: 8px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 12px;
+    }
+    thead tr { background: #1e293b; color: white; }
+    th {
+      padding: 11px 10px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    th:nth-child(2) { width: 26%; }
+    th:nth-child(3), th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7) { text-align: right; white-space: nowrap; }
+    td {
+      padding: 10px;
+      border-bottom: 1px solid #e2e8f0;
+      color: #334155;
+      text-align: left;
+    }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody tr:nth-child(odd) { background: #ffffff; }
+    .idx { color: #64748b; font-weight: 700; width: 34px; }
+    .desc { font-weight: 700; color: #334155; }
+    .qty, .price, .disc, .vat, .total { text-align: right; white-space: nowrap; }
+    .total { font-weight: 800; color: #111827; }
+    .empty { text-align: center; color: #64748b; padding: 14px; font-style: italic; }
+    .totals { margin-top: 16px; display: flex; justify-content: flex-end; }
+    .totals-panel { width: min(320px, 100%); }
+    .totals-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 12px; }
+    .totals-row.total-main { font-size: 18px; font-weight: 800; color: #111827; border-bottom: 2px solid #334155; padding: 11px 0; }
+    .totals-row.total-main span:last-child { color: #111827; }
+    .terms { border-top: 1px solid #e2e8f0; margin-top: 20px; padding-top: 14px; font-size: 12px; color: #475569; }
+    .terms-title { font-weight: 800; color: #64748b; text-transform: uppercase; font-size: 11px; margin-bottom: 8px; }
+    .terms-text { margin: 0; }
+    .signatures { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 18px; border-top: 1px solid #e2e8f0; margin-top: 18px; padding-top: 16px; font-size: 12px; color: #64748b; }
+    .signature-line { border-top: 1px solid #94a3b8; padding-top: 12px; margin-top: 32px; color: #334155; font-weight: 700; }
+    .footer-note { border-top: 1px solid #e2e8f0; margin-top: 22px; padding-top: 12px; color: #94a3b8; font-size: 11px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="quotation-sheet">
+    <section class="quotation-head">
+      <div class="company">
+        ${logoUrl ? `<img class="company-logo" src="${logoUrl}" alt="${companyName}" />` : `<div class="company-logo-fallback">${companyName.charAt(0)}</div>`}
+        <div>
+          <div class="company-title">${companyName}</div>
+          <p class="company-meta">${companyAddress}</p>
+          ${companyTrn ? `<div class="company-trn">TRN: ${companyTrn}</div>` : ''}
+          ${companyPhone ? `<div class="company-meta">Tel: ${companyPhone}</div>` : ''}
+        </div>
+      </div>
+      <div class="quote-id">
+        <div class="quote-title">QUOTATION</div>
+        <div class="quote-number"><strong>Quote #:</strong> ${escapeHtml(q.quotation_number)}</div>
+        <div class="quote-number"><strong>Date:</strong> ${formatDate(q.issue_date)}</div>
+        ${q.valid_until ? `<div class="quote-number"><strong>Valid Until:</strong> ${formatDate(q.valid_until)}</div>` : ''}
+      </div>
+    </section>
+
+    <section class="prepared-card">
+      <div class="label">Prepared For</div>
+      <div class="prepared-customer">${escapeHtml(q.customer_name)}</div>
+      ${q.customer_trn ? `<div class="company-meta">TRN: ${escapeHtml(q.customer_trn)}</div>` : ''}
+    </section>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Description</th>
+          <th>Qty</th>
+          <th>Unit Price</th>
+          <th>Disc%</th>
+          <th>VAT 5%</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>${itemRows}</tbody>
+    </table>
+
+    <section class="totals">
+      <div class="totals-panel">
+        <div class="totals-row"><span>Subtotal</span><span>${formatCurrency(q.subtotal)}</span></div>
+        ${q.discount_amount > 0 ? `<div class="totals-row"><span>Discount</span><span>-${formatCurrency(q.discount_amount)}</span></div>` : ''}
+        <div class="totals-row"><span>VAT (5%)</span><span>${formatCurrency(q.vat_amount)}</span></div>
+        <div class="totals-row total-main"><span>Total (AED)</span><span>${formatCurrency(q.total)}</span></div>
+      </div>
+    </section>
+
+    ${(q.notes || q.terms) ? `<section class="terms">
+      <div class="terms-title">Terms &amp; Conditions</div>
+      <p class="terms-text">${escapeHtml(q.terms || q.notes || 'This quotation is valid for 30 days.')}</p>
+    </section>` : `<section class="terms">
+      <div class="terms-title">Terms &amp; Conditions</div>
+      <p class="terms-text">This quotation is valid for 30 days.</p>
+    </section>`}
+
+    <section class="signatures">
+      <div>
+        <div class="signature-title">Authorized Signature</div>
+        <div class="signature-line">${companyName}</div>
+      </div>
+      <div>
+        <div class="signature-title">Customer Acceptance</div>
+        <div class="signature-line">Date &amp; Signature</div>
+      </div>
+    </section>
+
+    <div class="footer-note">This quotation is valid for 30 days · ${companyName} — ${companyAddress}</div>
+  </div>
+</body>
+</html>`;
+}
+
+function number(value: number) {
+  return Number.isInteger(value) ? value : Number(value).toFixed(2);
+}
+
 interface Props {
   quotation: Quotation;
   onClose: () => void;
@@ -34,42 +231,23 @@ export default function QuotationView({ quotation: q, onClose }: Props) {
   const handlePrint = () => {
     if (!hasItems) return;
 
-    const printArea = document.getElementById('qt-print-area');
-    if (!printArea) {
-      window.print();
-      return;
-    }
-
-    const printWindow = window.open('', '_blank', 'width=900,height=900');
+    const printWindow = window.open('', '_blank', 'width=980,height=900');
     if (!printWindow) {
-      window.print();
       return;
     }
 
-    const html = printArea.innerHTML;
     printWindow.document.open();
-    printWindow.document.write(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Quotation</title>
-  <style>
-    @page { size: A4; margin: 12mm; }
-    body { margin: 0; background: #fff; color: #0f172a; font-family: Inter, Arial, Helvetica, sans-serif; }
-    .quotation-window { min-height: 100vh; padding: 0; background: #fff; }
-    .quotation-window table { border-collapse: collapse; width: 100%; }
-    .quotation-window th, .quotation-window td { border: none; }
-    .quotation-window .font-sans { font-family: Inter, Arial, Helvetica, sans-serif; }
-  </style>
-</head>
-<body>
-  <div class="quotation-window">${html}</div>
-</body>
-</html>`);
+    printWindow.document.write(buildQuotationPrintableHtml(q, items, company));
     printWindow.document.close();
     printWindow.focus();
-    setTimeout(() => printWindow.print(), 250);
+
+    setTimeout(() => {
+      try {
+        printWindow.print();
+      } catch {
+        // Ignore browser blocked print handling
+      }
+    }, 250);
   };
 
   return (
@@ -126,10 +304,6 @@ export default function QuotationView({ quotation: q, onClose }: Props) {
             )}
           </div>
         </div>
-      </div>
-
-      <div id="qt-print-area" className="hidden print:block bg-white">
-        <QuotationPrintDocument q={q} items={items} company={company} />
       </div>
     </>
   );

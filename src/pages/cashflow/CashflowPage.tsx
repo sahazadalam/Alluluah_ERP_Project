@@ -16,6 +16,52 @@ interface Props {
 
 type TabType = 'audit' | 'expenses' | 'income' | 'withdrawals' | 'closing';
 
+const AUDIT_FIELD_LABELS: Record<string, string> = {
+  id: 'Record ID',
+  amount: 'Amount',
+  notes: 'Notes',
+  reference: 'Reference',
+  branch_id: 'Branch',
+  created_by: 'Created By',
+  created_at: 'Created At',
+  updated_at: 'Updated At',
+  invoice_id: 'Invoice ID',
+  payment_date: 'Payment Date',
+  payment_method: 'Payment Method',
+  category: 'Category',
+  description: 'Description',
+};
+
+const AUDIT_HIDDEN_FIELDS = new Set(['id', 'created_by', 'created_at', 'updated_at', 'branch_id', 'invoice_id']);
+
+function auditValueLabel(key: string) {
+  return AUDIT_FIELD_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function auditValueDisplay(key: string, value: unknown) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (key === 'amount') return formatCurrency(Number(value));
+  if (key === 'payment_method') return String(value).replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+  if (key === 'payment_date' || key === 'expense_date' || key === 'income_date' || key === 'issue_date' || key === 'due_date') {
+    return formatDate(String(value));
+  }
+  if (key === 'created_at') return formatDateTime(String(value));
+  if (key === 'notes' && String(value).trim().length === 0) return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+}
+
+function auditRowsFromValues(values?: Record<string, unknown>) {
+  if (!values) return [];
+  return Object.entries(values)
+    .filter(([key]) => !AUDIT_HIDDEN_FIELDS.has(key))
+    .map(([key, value]) => ({
+      key,
+      label: auditValueLabel(key),
+      value: auditValueDisplay(key, value),
+    }));
+}
+
 const actionColors: Record<string, string> = {
   INSERT: 'bg-green-100 text-green-700',
   UPDATE: 'bg-blue-100 text-blue-700',
@@ -728,17 +774,53 @@ export default function CashflowPage({ branchFilter }: Props) {
               </div>
             </div>
 
-            {Object.keys(selectedItem.old_values || {}).length > 0 && (
-              <div>
-                <div className="text-xs font-medium text-slate-500 mb-1">Old Values</div>
-                <pre className="bg-slate-100 p-3 rounded text-xs overflow-auto max-h-40">{JSON.stringify(selectedItem.old_values, null, 2)}</pre>
-              </div>
-            )}
+            {(auditRowsFromValues(selectedItem.old_values).length > 0 || auditRowsFromValues(selectedItem.new_values).length > 0) && (
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">Recorded Values</div>
+                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-semibold text-slate-600">Field</th>
+                          <th className="text-left px-3 py-2 font-semibold text-slate-600">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditRowsFromValues(selectedItem.new_values).map(row => (
+                          <tr key={row.key} className="border-t border-slate-100">
+                            <td className="px-3 py-2 text-slate-500 font-medium">{row.label}</td>
+                            <td className="px-3 py-2 text-slate-800">{row.value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
 
-            {Object.keys(selectedItem.new_values || {}).length > 0 && (
-              <div>
-                <div className="text-xs font-medium text-slate-500 mb-1">New Values</div>
-                <pre className="bg-slate-100 p-3 rounded text-xs overflow-auto max-h-40">{JSON.stringify(selectedItem.new_values, null, 2)}</pre>
+                {auditRowsFromValues(selectedItem.old_values).length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">Previous Values</div>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-semibold text-slate-600">Field</th>
+                            <th className="text-left px-3 py-2 font-semibold text-slate-600">Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {auditRowsFromValues(selectedItem.old_values).map(row => (
+                            <tr key={row.key} className="border-t border-slate-100">
+                              <td className="px-3 py-2 text-slate-500 font-medium">{row.label}</td>
+                              <td className="px-3 py-2 text-slate-800">{row.value}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

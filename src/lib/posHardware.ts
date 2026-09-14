@@ -167,17 +167,32 @@ export function openCashDrawerViaQz(printerName: string, command: string = DEFAU
 }
 
 /**
- * Browser print mode: open a new window with the receipt HTML and call print.
- * The user selects the thermal printer from the system print dialog.
+ * Browser print mode: open a clean print document that contains exactly the
+ * receipt HTML so the browser can show the same markup inside the print dialog
+ * and also save it as PDF.
  */
 export function browserPrintReceipt(html: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const win = window.open('', '_blank', 'width=400,height=700');
+    const win = window.open('', '_blank', 'width=420,height=720');
     if (!win) {
       resolve(false);
       return;
     }
-    win.document.write(html);
+
+    win.document.open();
+    win.document.write(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Receipt</title>
+  <style>
+    @page { margin: 0; size: 80mm auto; }
+    body { margin: 0; background: #fff; }
+  </style>
+</head>
+<body>${html}</body>
+</html>`);
     win.document.close();
     win.focus();
 
@@ -188,7 +203,7 @@ export function browserPrintReceipt(html: string): Promise<boolean> {
       } catch {
         resolve(false);
       }
-    }, 500);
+    }, 350);
   });
 }
 
