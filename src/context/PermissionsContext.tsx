@@ -16,8 +16,8 @@ interface PermissionRow {
 }
 
 interface PermissionsContextType {
-  can: (module: string, action: PermAction, branchId?: string | null) => boolean;
-  canView: (module: string) => boolean;
+  can: (module: string, action: PermAction, branchId?: string | null, companyId?: string | null) => boolean;
+  canView: (module: string, branchId?: string | null, companyId?: string | null) => boolean;
   permissions: PermissionRow[];
   loading: boolean;
   reload: () => void;
@@ -88,7 +88,26 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { load(); }, [profile?.id, profile?.role]);
 
-  const can = (module: string, action: PermAction, branchId?: string | null): boolean => {
+  useEffect(() => {
+    if (!profile?.id) return;
+
+    const channel = supabase.channel(`permissions-${profile.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'permissions',
+        filter: `user_id=eq.${profile.id}`,
+      }, () => {
+        load();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile?.id]);
+
+  const can = (module: string, action: PermAction, branchId?: string | null, companyId?: string | null): boolean => {
     if (!profile) return false;
 
     // Admin-only modules can never be inherited by non-admin users through
@@ -98,35 +117,34 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     }
 
     const roleModules = ROLE_PERMISSIONS[(profile.role as UserRole) ?? 'sales'] ?? [];
-    const targetBranch = branchId ?? null;
+    const targetBranch = branchId ?? profile.branch_id ?? null;
+    const targetCompany = companyId ?? profile.company_id ?? null;
 
-    // Prefer branch-specific permission, fall back to global (branch_id = null).
-    // However, if the template row exists with a false grant, do not let that
-    // false row hide the module when the static role matrix says that the user
-    // role is supposed to see the page.
-    const branchMatch = permissions.find(p =>
-      p.module === module && p.action === action && p.branch_id === targetBranch
-    );
-    if (branchMatch) {
-      if (branchMatch.granted) return true;
-      if (action === 'view' && roleModules.includes(module)) return true;
-      return false;
-    }
+    const rows = permissions.filter(p => p.module === module && p.action === action);
 
-    const globalMatch = permissions.find(p =>
-      p.module === module && p.action === action && p.branch_id === null
-    );
-    if (globalMatch) {
-      if (globalMatch.granted) return true;
-      if (action === 'view' && roleModules.includes(module)) return true;
-      return false;
-    }
+    // Apply an explicit permission precedence chain:
+    // 1. exact branch + exact company row
+    // 2. branch-specific row without company
+    // 3. exact company row without branch
+    // 4. global row without branch/company
+    // This lets a custom grant inserted in the user's permissions table
+    // dominate the template fallback and become visible to the user session.
+    const exactBranchCompany = rows.find(p => p.branch_id === targetBranch && p.company_id === targetCompany);
+    if (exactBranchCompany) return exactBranchCompany.granted;
 
-    // Fallback for role-template drift: if the template table is missing the
-    // explicit row for a role/module 'view' action, the static role list should
-    // still let the user access the pages that the product role matrix allows.
-    // This keeps HR/accounting/other business windows visible instead of hiding
-    // them behind a missing permission row in the database.
+    const branchOnly = rows.find(p => p.branch_id === targetBranch && p.company_id === null);
+    if (branchOnly) return branchOnly.granted;
+
+    const companyOnly = rows.find(p => p.branch_id === null && p.company_id === targetCompany);
+    if (companyOnly) return companyOnly.granted;
+
+    const globalRow = rows.find(p => p.branch_id === null && p.company_id === null);
+    if (globalRow) return globalRow.granted;
+
+    // Fallback to role template list only when there is no explicit user row.
+    // This means custom rows inserted by the admin can truly override or add
+    // visibility for pages like HR / attendance / payroll / branches, rather
+    // than being hidden behind a false static matrix fallback.
     if (action === 'view' && roleModules.includes(module)) {
       return true;
     }
@@ -134,7 +152,7 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     return false;
   };
 
-  const canView = (module: string) => can(module, 'view');
+  const canView = (module: string, branchId?: string | null, companyId?: string | null) => can(module, 'view', branchId, companyId);
 
   return (
     <PermissionsContext.Provider value={{ can, canView, permissions, loading, reload: load }}>

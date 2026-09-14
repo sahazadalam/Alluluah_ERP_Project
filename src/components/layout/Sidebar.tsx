@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { usePermissions } from '../../context/PermissionsContext';
-import { ROLE_PERMISSIONS, UserRole, Branch } from '../../lib/types';
+import { Branch } from '../../lib/types';
 import {
   LayoutDashboard, Users, Truck, Package, FileText, Receipt,
   UserCircle, BookOpen, ShoppingCart, Settings, ChevronDown,
@@ -53,10 +53,8 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
 
-  const permissions = ROLE_PERMISSIONS[(profile?.role as UserRole) ?? 'sales'];
-  const allowedItems = navItems.filter(item =>
-    permissions.includes(item.permission) && (canView(item.permission) || item.id === 'scanner')
-  );
+  const effectiveBranchId = currentBranch?.id ?? profile?.branch_id ?? null;
+  const allowedItems = navItems.filter(item => canView(item.permission, effectiveBranchId, profile?.company_id ?? null) || item.id === 'scanner');
 
   const roleColors: Record<string, string> = {
     admin: 'bg-red-500', manager: 'bg-amber-500', sales: 'bg-primary-500',

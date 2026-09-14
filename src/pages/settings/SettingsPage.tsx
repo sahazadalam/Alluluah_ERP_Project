@@ -135,18 +135,48 @@ export default function SettingsPage() {
     // Auto-generate internal email (never shown to user)
     const email = `${cleanUsername}@al-luluah.local`;
 
-    const { error: funcError } = await supabase.functions.invoke('user-management', {
-      body: {
-        action: 'create_user',
-        email,
-        password: createForm.password,
-        full_name: createForm.full_name.trim(),
-        username: cleanUsername,
-        role: createForm.role,
-        branch_id: createForm.branch_id || null,
+    const { data: signupData, error: signupError } = await supabase.auth.signUp({
+      email,
+      password: createForm.password,
+      options: {
+        data: {
+          full_name: createForm.full_name.trim(),
+          username: cleanUsername,
+          role: createForm.role,
+          branch_id: createForm.branch_id || null,
+        },
       },
     });
-    if (funcError) { setError(getInvokeError(funcError)); setSaving(false); return; }
+
+    if (signupError) {
+      setError(signupError.message);
+      setSaving(false);
+      return;
+    }
+
+    const userId = signupData.user?.id;
+    if (userId) {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .upsert({
+          id: userId,
+          email,
+          full_name: createForm.full_name.trim(),
+          username: cleanUsername,
+          role: createForm.role,
+          branch_id: createForm.branch_id || null,
+          company_id: null,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+
+      if (profileError) {
+        setError('User created in auth, but profile sync failed: ' + profileError.message);
+        setSaving(false);
+        return;
+      }
+    }
+
     setSaving(false);
     setShowCreateModal(false);
     setCreateForm({ password: '', full_name: '', role: 'sales', branch_id: '' });
@@ -162,10 +192,11 @@ export default function SettingsPage() {
 
   const togglePerm = async (module: string, action: PermAction, current: boolean) => {
     if (!permUser) return;
-    const existing = userPerms.find(p => p.module === module && p.action === action && p.branch_id === null);
+    const existing = userPerms.find(p => p.module === module && p.action === action && p.branch_id === null && p.company_id === null);
     if (existing) {
-      await supabase.from('permissions').update({ granted: !current }).eq('id', existing.id);
-      setUserPerms(prev => prev.map(p => p.id === existing.id ? { ...p, granted: !current } : p));
+      const desired = !current;
+      await supabase.from('permissions').update({ granted: desired }).eq('id', existing.id);
+      setUserPerms(prev => prev.map(p => p.id === existing.id ? { ...p, granted: desired } : p));
     } else {
       const { data } = await supabase.from('permissions').insert({
         user_id: permUser.id,
@@ -212,7 +243,7 @@ export default function SettingsPage() {
   };
 
   const hasPerm = (module: string, action: PermAction) => {
-    const p = userPerms.find(p => p.module === module && p.action === action);
+    const p = userPerms.find(p => p.module === module && p.action === action && p.branch_id === null && p.company_id === null);
     return p?.granted ?? false;
   };
 

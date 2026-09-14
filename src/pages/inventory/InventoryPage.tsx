@@ -49,14 +49,24 @@ export default function InventoryPage({ branchFilter }: Props) {
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: prods }, { data: cats }, { data: inv }] = await Promise.all([
-      supabase.from('products').select('*, category:categories(*)').order('name'),
+    const [{ data: cats }, { data: inv }] = await Promise.all([
       supabase.from('categories').select('*').order('name'),
-      branchFilter ? supabase.from('branch_inventory').select('*, product:products(*)').eq('branch_id', branchFilter) : supabase.from('branch_inventory').select('*, product:products(*)'),
+      branchFilter
+        ? supabase.from('branch_inventory').select('*, product:products(*, category:categories(*))').eq('branch_id', branchFilter)
+        : supabase.from('branch_inventory').select('*, product:products(*, category:categories(*))'),
     ]);
-    setProducts(prods ?? []);
+
+    const rows = inv ?? [];
+    const productMap = new Map<string, Product>();
+    for (const row of rows) {
+      const product = row.product as Product | null;
+      if (!product) continue;
+      if (!productMap.has(product.id)) productMap.set(product.id, product);
+    }
+
+    setProducts(Array.from(productMap.values()));
     setCategories(cats ?? []);
-    setBranchInventory(inv ?? []);
+    setBranchInventory(rows);
     setLoading(false);
   };
 

@@ -1,6 +1,5 @@
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { PermissionsProvider, usePermissions } from './context/PermissionsContext';
-import { ROLE_PERMISSIONS, UserRole } from './lib/types';
 import LoginPage from './pages/LoginPage';
 import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
@@ -53,11 +52,14 @@ function AppContent() {
   const { canView } = usePermissions();
   const [currentPage, setCurrentPage] = useState('dashboard');
 
+  const getBranchFilter = () => {
+    if (isGlobalAdmin) return currentBranch?.id ?? null;
+    return profile?.branch_id ?? null;
+  };
+
   const isPageAllowed = (page: string) => {
-    const roleList = ROLE_PERMISSIONS[(profile?.role as UserRole) ?? 'sales'];
-    if (!roleList.includes(page)) return false;
     if (page === 'scanner') return true;
-    return canView(page);
+    return canView(page, getBranchFilter(), profile?.company_id ?? null);
   };
 
   if (loading) {
@@ -78,11 +80,6 @@ function AppContent() {
   };
 
   const pageInfo = pageTitles[currentPage] ?? { title: 'Al Luluah ERP', subtitle: '' };
-
-  const getBranchFilter = () => {
-    if (isGlobalAdmin) return currentBranch?.id ?? null;
-    return profile.branch_id;
-  };
 
   const renderPage = () => {
     if (!isPageAllowed(currentPage)) {
