@@ -629,7 +629,7 @@ export default function POSPage({ branchFilter }: Props) {
   };
 
   // Open cash drawer
-  const doOpenCashDrawer = async (reason: string = 'Transaction', paymentMethod: 'cash' | 'card' | 'bank_transfer' | null = null) => {
+  const doOpenCashDrawer = async (reason: string = 'Transaction', paymentMethod: 'cash' | 'card' | 'bank_transfer') => {
     // Drawer hardware must never be opened for card or bank transfer payments.
     if (paymentMethod && paymentMethod !== 'cash') {
       return;
