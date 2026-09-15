@@ -628,7 +628,12 @@ export default function POSPage({ branchFilter }: Props) {
   };
 
   // Open cash drawer
-  const doOpenCashDrawer = async (reason: string = 'Transaction') => {
+  const doOpenCashDrawer = async (reason: string = 'Transaction', paymentMethod: 'cash' | 'card' | 'bank_transfer' | null = null) => {
+    // Drawer hardware must never be opened for card or bank transfer payments.
+    if (paymentMethod && paymentMethod !== 'cash') {
+      return;
+    }
+
     if (!hwSettings) {
       showToast('error', 'Hardware settings not loaded.');
       return;
@@ -794,9 +799,9 @@ export default function POSPage({ branchFilter }: Props) {
     setLastReceiptHtml(receiptHtml);
     setShowReceiptPreview(true);
 
-    // Auto open cash drawer for cash sales
+    // Auto open cash drawer only for real cash payments.
     if (paymentMethod === 'cash' && hwSettings?.auto_open_drawer && hwSettings?.cash_drawer_enabled) {
-      await doOpenCashDrawer('Cash sale: ' + txNum);
+      await doOpenCashDrawer('Cash sale: ' + txNum, paymentMethod);
     }
 
     setShowSuccess(true);
@@ -1579,8 +1584,8 @@ export default function POSPage({ branchFilter }: Props) {
             className="flex-1 bg-primary-600 hover:bg-primary-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2">
             <PrinterIcon size={14} /> Print Receipt
           </button>
-          {hwSettings?.cash_drawer_enabled && (
-            <button onClick={() => doOpenCashDrawer('Manual from receipt')}
+          {hwSettings?.cash_drawer_enabled && paymentMethod === 'cash' && (
+            <button onClick={() => doOpenCashDrawer('Manual from receipt', paymentMethod)}
               className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2">
               <Unlock size={14} /> Open Drawer
             </button>
