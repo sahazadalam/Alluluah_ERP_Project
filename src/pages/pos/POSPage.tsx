@@ -86,6 +86,7 @@ export default function POSPage({ branchFilter }: Props) {
   // Receipt state
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
   const [lastReceiptHtml, setLastReceiptHtml] = useState('');
+  const [receiptPaymentMethod, setReceiptPaymentMethod] = useState<'cash' | 'card' | 'bank_transfer' | null>(null);
 
   // Toast
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -796,6 +797,7 @@ export default function POSPage({ branchFilter }: Props) {
 
     // Generate and show receipt
     const receiptHtml = generateReceipt({ number: txNum, items: cart, subtotal, vat: vatTotal, total, paid: paymentMethod === 'cash' ? Number(amountTendered) : total, change, method: paymentMethod });
+    setReceiptPaymentMethod(paymentMethod);
     setLastReceiptHtml(receiptHtml);
     setShowReceiptPreview(true);
 
@@ -945,6 +947,7 @@ export default function POSPage({ branchFilter }: Props) {
     } else {
       setLastReceiptHtml(sale.receipt_html);
     }
+    setReceiptPaymentMethod(sale.payment_method as 'cash' | 'card' | 'bank_transfer');
     setShowReceiptPreview(true);
   };
 
@@ -1188,9 +1191,11 @@ export default function POSPage({ branchFilter }: Props) {
                     {drawerStatus === 'open' ? <Unlock size={14} /> : <Lock size={14} />}
                     Drawer: {drawerStatus}
                   </span>
-                  <button onClick={() => doOpenCashDrawer('Manual open')} className="px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-50">
+                  {paymentMethod === 'cash' && (
+                    <button onClick={() => doOpenCashDrawer('Manual open', paymentMethod)} className="px-2 py-1 text-xs border border-slate-200 rounded hover:bg-slate-50">
                     Open Drawer
-                  </button>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1584,8 +1589,8 @@ export default function POSPage({ branchFilter }: Props) {
             className="flex-1 bg-primary-600 hover:bg-primary-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2">
             <PrinterIcon size={14} /> Print Receipt
           </button>
-          {hwSettings?.cash_drawer_enabled && paymentMethod === 'cash' && (
-            <button onClick={() => doOpenCashDrawer('Manual from receipt', paymentMethod)}
+          {hwSettings?.cash_drawer_enabled && receiptPaymentMethod === 'cash' && (
+            <button onClick={() => doOpenCashDrawer('Manual from receipt', receiptPaymentMethod)}
               className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2">
               <Unlock size={14} /> Open Drawer
             </button>
