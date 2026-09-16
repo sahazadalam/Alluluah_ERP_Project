@@ -948,6 +948,19 @@ export interface ProjectExpense {
   created_at: string;
 }
 
+export interface ProjectActivity {
+  id: string;
+  project_id: string;
+  branch_id: string | null;
+  company_id: string | null;
+  activity_type: string;
+  description: string;
+  metadata: Record<string, unknown>;
+  created_by: string | null;
+  created_at: string;
+  project?: Project;
+}
+
 export interface EmployeeContract {
   id: string;
   employee_id: string;

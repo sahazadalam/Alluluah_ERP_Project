@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { formatCurrency } from '../../lib/types';
+import { formatCurrency, Project, ProjectAssignment, ProjectExpense } from '../../lib/types';
+import { calculateProjectFinancials, ProjectFinancialSummary } from '../../lib/projectFinance';
 import StatCard from '../../components/common/StatCard';
 import { useAuth } from '../../context/AuthContext';
 import { TrendingUp, DollarSign, Receipt, TrendingDown, Users, Building, BarChart3, ArrowDownRight, ArrowUpRight, Package, ShoppingCart } from 'lucide-react';
@@ -31,6 +32,12 @@ interface Props {
   branchFilter: string | null;
 }
 
+interface ProjectReportRow {
+  project: Project;
+  summary: ProjectFinancialSummary;
+  team: ProjectAssignment[];
+}
+
 export default function ReportsPage({ branchFilter }: Props) {
   const { isGlobalAdmin, branches } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -42,7 +49,8 @@ export default function ReportsPage({ branchFilter }: Props) {
   const [branchPerformance, setBranchPerformance] = useState<BranchPerformance[]>([]);
   const [posSales, setPosSales] = useState<Array<{ id: string; transaction_number: string; total: number; payment_method: string; cashier_name: string; created_at: string }>>([]);
   const [stockMovements, setStockMovements] = useState<Array<{ id: string; movement_type: string; quantity: number; previous_quantity: number | null; new_quantity: number | null; reference_number: string; notes: string; created_at: string; product: { name: string; code: string } | null }>>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'pos' | 'inventory'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'pos' | 'inventory' | 'projects'>('overview');
+  const [projectReports, setProjectReports] = useState<ProjectReportRow[]>([]);
   const [dateRange, setDateRange] = useState({
     start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0],
@@ -72,6 +80,32 @@ export default function ReportsPage({ branchFilter }: Props) {
       if (branchFilter) incomeQuery = incomeQuery.eq('branch_id', branchFilter);
       const { data: income } = await incomeQuery;
       const totalIncome = (income ?? []).reduce((s, i) => s + (i.amount ?? 0), 0);
+
+      let projectQuery = supabase.from('projects').select('*, branch:branches(id, name)').order('created_at', { ascending: false });
+      let assignmentQuery = supabase.from('project_assignments').select('*').eq('is_active', true);
+      let projectExpenseQuery = supabase.from('project_expenses').select('*');
+      if (branchFilter) {
+        projectQuery = projectQuery.eq('branch_id', branchFilter);
+        assignmentQuery = assignmentQuery.eq('branch_id', branchFilter);
+        projectExpenseQuery = projectExpenseQuery.eq('branch_id', branchFilter);
+      }
+      const [{ data: projects }, { data: assignments }, { data: projectExpenses }] = await Promise.all([
+        projectQuery,
+        assignmentQuery,
+        projectExpenseQuery,
+      ]);
+      const projectRows = (projects ?? []) as Project[];
+      const assignmentRows = (assignments ?? []) as ProjectAssignment[];
+      const projectExpenseRows = (projectExpenses ?? []) as ProjectExpense[];
+      const assignmentsByProject = new Map<string, ProjectAssignment[]>();
+      const expensesByProject = new Map<string, ProjectExpense[]>();
+      assignmentRows.forEach(assignment => assignmentsByProject.set(assignment.project_id, [...(assignmentsByProject.get(assignment.project_id) ?? []), assignment]));
+      projectExpenseRows.forEach(expense => expensesByProject.set(expense.project_id, [...(expensesByProject.get(expense.project_id) ?? []), expense]));
+      setProjectReports(projectRows.map(project => ({
+        project,
+        team: assignmentsByProject.get(project.id) ?? [],
+        summary: calculateProjectFinancials(project, assignmentsByProject.get(project.id), expensesByProject.get(project.id)),
+      })));
 
       // Customer count
       let customerQuery = supabase.from('customers').select('id', { count: 'exact', head: true }).eq('is_active', true);
@@ -167,6 +201,10 @@ export default function ReportsPage({ branchFilter }: Props) {
             <button onClick={() => setActiveTab('inventory')}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'inventory' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
               Stock Movements
+            </button>
+            <button onClick={() => setActiveTab('projects')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'projects' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+              Projects
             </button>
           </div>
 
@@ -339,6 +377,41 @@ export default function ReportsPage({ branchFilter }: Props) {
         </>
       )}
         </>
+      )}
+
+      {activeTab === 'projects' && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+            <h3 className="font-semibold text-slate-800">Project Financial Report</h3>
+            <span className="text-sm text-slate-500">{projectReports.length} projects</span>
+          </div>
+          <table className="w-full text-sm min-w-[1100px]">
+            <thead><tr className="bg-slate-50">
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Project / Customer</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Branch</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Status / Dates</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Contract Value</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Expenses</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Team Cost</th>
+              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Est. Profit</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Team</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {projectReports.length === 0 ? <tr><td colSpan={8} className="text-center py-10 text-slate-400">No projects found</td></tr> : projectReports.map(({ project, summary, team }) => (
+                <tr key={project.id} className="hover:bg-slate-50 align-top">
+                  <td className="px-4 py-3"><div className="font-medium text-slate-800">{project.name}</div><div className="text-xs text-slate-500">{project.project_number} · {project.customer_name || 'No customer'}</div></td>
+                  <td className="px-4 py-3 text-slate-600">{project.branch?.name ?? '—'}</td>
+                  <td className="px-4 py-3"><div className="capitalize text-slate-700">{project.status} · {project.priority}</div><div className="text-xs text-slate-500">{project.start_date ?? '—'} to {project.end_date ?? '—'}</div></td>
+                  <td className="px-4 py-3 text-right font-medium">{formatCurrency(project.contract_value)}</td>
+                  <td className="px-4 py-3 text-right text-red-600">{formatCurrency(summary.directExpenses)}</td>
+                  <td className="px-4 py-3 text-right text-amber-700">{formatCurrency(summary.employeeCosts)}</td>
+                  <td className={`px-4 py-3 text-right font-semibold ${summary.estimatedProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(summary.estimatedProfit)}</td>
+                  <td className="px-4 py-3 text-slate-600">{team.length} assigned</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

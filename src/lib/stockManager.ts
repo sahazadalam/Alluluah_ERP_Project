@@ -134,20 +134,19 @@ export async function deductStockForSale(
       .eq('id', item.product_id);
 
     // Create stock movement record
-    const { error: moveErr } = await supabase.from('stock_movements').insert({
-      product_id: item.product_id,
-      movement_type: 'POS_SALE',
-      quantity: item.quantity,
-      previous_quantity: currentStock,
-      new_quantity: newStock,
-      branch_id: branchId,
-      transaction_id: transactionId,
-      cashier_id: cashierId,
-      cashier_name: cashierName,
-      shift_id: shiftId,
-      reference_number: transactionNumber,
-      notes: `POS Sale: ${transactionNumber}`,
-      created_by: cashierId,
+    const { error: moveErr } = await supabase.rpc('record_pos_stock_movement', {
+      p_product_id: item.product_id,
+      p_movement_type: 'POS_SALE',
+      p_quantity: item.quantity,
+      p_previous_quantity: currentStock,
+      p_new_quantity: newStock,
+      p_branch_id: branchId,
+      p_transaction_id: transactionId,
+      p_cashier_id: cashierId,
+      p_cashier_name: cashierName,
+      p_shift_id: shiftId,
+      p_reference_number: transactionNumber,
+      p_notes: `POS Sale: ${transactionNumber}`,
     });
 
     if (moveErr) {
@@ -210,20 +209,19 @@ export async function restoreStockForReturn(
     if (prodErr) return { success: false, message: `Failed to update product stock: ${prodErr.message}` };
 
     // Create stock movement record
-    const { error: moveErr } = await supabase.from('stock_movements').insert({
-      product_id: item.product_id,
-      movement_type: 'POS_RETURN',
-      quantity: item.quantity,
-      previous_quantity: currentStock,
-      new_quantity: newStock,
-      branch_id: branchId,
-      transaction_id: transactionId,
-      cashier_id: cashierId,
-      cashier_name: cashierName,
-      shift_id: shiftId,
-      reference_number: returnNumber,
-      notes: `POS Return: ${returnNumber} (Original: ${originalTransactionId})`,
-      created_by: cashierId,
+    const { error: moveErr } = await supabase.rpc('record_pos_stock_movement', {
+      p_product_id: item.product_id,
+      p_movement_type: 'POS_RETURN',
+      p_quantity: item.quantity,
+      p_previous_quantity: currentStock,
+      p_new_quantity: newStock,
+      p_branch_id: branchId,
+      p_transaction_id: transactionId,
+      p_cashier_id: cashierId,
+      p_cashier_name: cashierName,
+      p_shift_id: shiftId,
+      p_reference_number: returnNumber,
+      p_notes: `POS Return: ${returnNumber} (Original: ${originalTransactionId})`,
     });
     if (moveErr) return { success: false, message: `Failed to record stock movement: ${moveErr.message}` };
 

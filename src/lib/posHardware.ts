@@ -22,6 +22,39 @@ export interface PosHardwareSettings {
 // Standard pulse for most drawers: \x1B\x70\x00\x19\xFA
 export const DEFAULT_DRAWER_COMMAND = '\x1B\x70\x00\x19\xFA';
 
+console.warn('[POS DIAGNOSTIC ACTIVE]', {
+  build: 'al-luluah-erp-fixed-v2-pos-drawer-diagnostic',
+  module: 'src/lib/posHardware.ts',
+  configuredDrawerBytes: [0x1b, 0x70, 0x00, 0x19, 0xfa],
+});
+
+export function isCashPaymentMethod(paymentMethod: unknown): boolean {
+  return String(paymentMethod ?? '').trim().toLowerCase() === 'cash';
+}
+
+function removeDrawerKickCommands(data: Uint8Array): Uint8Array {
+  const result: number[] = [];
+  for (let index = 0; index < data.length; index += 1) {
+    if (data[index] === 0x1b && data[index + 1] === 0x70) {
+      index += 4;
+      continue;
+    }
+    result.push(data[index]);
+  }
+  return Uint8Array.from(result);
+}
+
+function removeDrawerKickMarkup(html: string): string {
+  const esc = String.fromCharCode(0x1b);
+  let result = html;
+  let commandIndex = result.indexOf(`${esc}p`);
+  while (commandIndex >= 0) {
+    result = result.slice(0, commandIndex) + result.slice(commandIndex + 5);
+    commandIndex = result.indexOf(`${esc}p`);
+  }
+  return result;
+}
+
 // QZ Tray WebSocket URL
 const QZ_DEFAULT_URL = 'ws://localhost:8181';
 
@@ -117,7 +150,23 @@ export function isQzConnected(): boolean {
  * Send a raw ESC/POS byte array to the specified printer via QZ Tray.
  * Returns a promise that resolves when the data is sent.
  */
-export function sendEscPosViaQz(printerName: string, data: Uint8Array): Promise<boolean> {
+export function sendEscPosViaQz(printerName: string, data: Uint8Array, paymentMethod: unknown = 'unknown'): Promise<boolean> {
+  const cashPayment = isCashPaymentMethod(paymentMethod);
+  const safeData = cashPayment ? data : removeDrawerKickCommands(data);
+  const bytes = Array.from(safeData);
+  const drawerCommandBytes = [0x1b, 0x70, 0x00, 0x19, 0xfa];
+  const containsConfiguredDrawerCommand = bytes.some((_, index) =>
+    drawerCommandBytes.every((commandByte, commandIndex) => bytes[index + commandIndex] === commandByte)
+  );
+  console.debug('[POS drawer trace] sendEscPosViaQz', {
+    printerName,
+    paymentMethod,
+    cashPayment,
+    bytes,
+    containsDrawerKick: safeData.some((byte, index) => byte === 0x1b && safeData[index + 1] === 0x70),
+    containsConfiguredDrawerCommand,
+  });
+  console.trace('[POS drawer trace] raw-printer-write');
   return new Promise((resolve, reject) => {
     if (!qzSocket || qzSocket.readyState !== WebSocket.OPEN) {
       reject(new Error('QZ Tray is not connected. Start QZ Tray and try again.'));
@@ -127,7 +176,7 @@ export function sendEscPosViaQz(printerName: string, data: Uint8Array): Promise<
     const message = {
       type: 'print',
       printer: printerName,
-      data: Array.from(data),
+      data: bytes,
     };
 
     const handler = (event: MessageEvent) => {
@@ -163,7 +212,13 @@ export function sendEscPosViaQz(printerName: string, data: Uint8Array): Promise<
 export function openCashDrawerViaQz(printerName: string, command: string = DEFAULT_DRAWER_COMMAND): Promise<boolean> {
   const encoder = new TextEncoder();
   const data = encoder.encode(command);
-  return sendEscPosViaQz(printerName, data);
+  console.debug('[POS drawer trace] openCashDrawerViaQz', {
+    printerName,
+    commandBytes: Array.from(data),
+    commandEscaped: JSON.stringify(command),
+  });
+  console.trace('[POS drawer trace] drawer-command-call');
+  return sendEscPosViaQz(printerName, data, 'cash');
 }
 
 /**
@@ -171,7 +226,14 @@ export function openCashDrawerViaQz(printerName: string, command: string = DEFAU
  * receipt HTML so the browser can show the same markup inside the print dialog
  * and also save it as PDF.
  */
-export function browserPrintReceipt(html: string): Promise<boolean> {
+export function browserPrintReceipt(html: string, paymentMethod: unknown = 'unknown'): Promise<boolean> {
+  const safeHtml = isCashPaymentMethod(paymentMethod) ? html : removeDrawerKickMarkup(html);
+  console.debug('[POS drawer trace] browserPrintReceipt', {
+    printerMode: 'browser',
+    paymentMethod,
+    action: 'receipt-print',
+    containsEscPosDrawerCommand: safeHtml.includes('\x1B\x70\x00\x19\xFA'),
+  });
   return new Promise((resolve) => {
     const win = window.open('', '_blank', 'width=420,height=720');
     if (!win) {
@@ -191,7 +253,7 @@ export function browserPrintReceipt(html: string): Promise<boolean> {
     body { margin: 0; background: #fff; }
   </style>
 </head>
-<body>${html}</body>
+<body>${safeHtml}</body>
 </html>`);
     win.document.close();
     win.focus();
@@ -257,9 +319,15 @@ export function htmlToEscPos(html: string): Uint8Array {
 /**
  * Test print — sends a small test receipt.
  */
-export async function testPrint(settings: PosHardwareSettings, receiptHtml: string): Promise<{ success: boolean; message: string }> {
+export async function testPrint(settings: PosHardwareSettings, receiptHtml: string, paymentMethod: unknown = 'unknown'): Promise<{ success: boolean; message: string }> {
+  console.debug('[POS drawer trace] testPrint', {
+    printerMode: settings.printer_mode,
+    printerName: settings.printer_name,
+    paymentMethod,
+    drawerCommandSent: false,
+  });
   if (settings.printer_mode === 'browser') {
-    const ok = await browserPrintReceipt(receiptHtml);
+    const ok = await browserPrintReceipt(receiptHtml, paymentMethod);
     return { success: ok, message: ok ? 'Print dialog opened. Select your thermal printer.' : 'Could not open print window. Check popup blocker.' };
   }
 
@@ -270,7 +338,7 @@ export async function testPrint(settings: PosHardwareSettings, receiptHtml: stri
     }
     try {
       const data = htmlToEscPos(receiptHtml);
-      await sendEscPosViaQz(settings.printer_name || 'POSTECH PT-88IV', data);
+      await sendEscPosViaQz(settings.printer_name || 'POSTECH PT-88IV', data, paymentMethod);
       return { success: true, message: 'Test print sent to ' + (settings.printer_name || 'POSTECH PT-88IV') };
     } catch (err) {
       return { success: false, message: err instanceof Error ? err.message : 'Print failed' };
@@ -284,6 +352,16 @@ export async function testPrint(settings: PosHardwareSettings, receiptHtml: stri
  * Test cash drawer — sends the kick command.
  */
 export async function testCashDrawer(settings: PosHardwareSettings): Promise<{ success: boolean; message: string }> {
+  const command = settings.cash_drawer_command || DEFAULT_DRAWER_COMMAND;
+  const commandBytes = Array.from(new TextEncoder().encode(command));
+  console.debug('[POS drawer trace] testCashDrawer', {
+    printerMode: settings.printer_mode,
+    printerName: settings.printer_name,
+    drawerCommandSent: settings.cash_drawer_enabled,
+    commandBytes,
+    commandEscaped: JSON.stringify(command),
+  });
+  console.trace('[POS drawer trace] test-drawer-call');
   if (!settings.cash_drawer_enabled) {
     return { success: false, message: 'Cash drawer is disabled in settings.' };
   }
@@ -292,7 +370,7 @@ export async function testCashDrawer(settings: PosHardwareSettings): Promise<{ s
     // Browser print mode cannot directly send ESC/POS commands.
     // Open a minimal print window that triggers the drawer via the printer driver.
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>@page{margin:0;size:80mm auto;}body{font-family:monospace;font-size:10px;}</style></head><body><pre>\x1B\x70\x00\x19\xFA</pre></body></html>`;
-    const ok = await browserPrintReceipt(html);
+    const ok = await browserPrintReceipt(html, 'cash');
     return { success: ok, message: ok ? 'Cash drawer command sent via browser print. Select your thermal printer.' : 'Could not open print window.' };
   }
 

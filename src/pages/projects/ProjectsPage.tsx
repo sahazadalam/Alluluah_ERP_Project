@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Project, ProjectAssignment, ProjectProgress, ProjectExpense, Employee, Customer } from '../../lib/types';
+import { Project, ProjectAssignment, ProjectProgress, ProjectExpense, ProjectActivity, Employee, Customer } from '../../lib/types';
 import { formatCurrency, formatDate } from '../../lib/types';
+import { calculateProjectFinancials } from '../../lib/projectFinance';
 import { useAuth } from '../../context/AuthContext';
 import {
   Plus, X, Search, Calendar, Users, DollarSign,
@@ -35,11 +36,14 @@ export default function ProjectsPage({ branchFilter }: Props) {
   const [assignments, setAssignments] = useState<ProjectAssignment[]>([]);
   const [progressReports, setProgressReports] = useState<ProjectProgress[]>([]);
   const [expenses, setExpenses] = useState<ProjectExpense[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'team' | 'progress' | 'expenses'>('overview');
+  const [activities, setActivities] = useState<ProjectActivity[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'team' | 'progress' | 'expenses' | 'history'>('overview');
   const [showForm, setShowForm] = useState(false);
   const [showProgressForm, setShowProgressForm] = useState(false);
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [showAssignForm, setShowAssignForm] = useState(false);
+    const [editingAssignment, setEditingAssignment] = useState<ProjectAssignment | null>(null);
+    const [assignmentError, setAssignmentError] = useState('');
   const [editing, setEditing] = useState<Project | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -52,7 +56,7 @@ export default function ProjectsPage({ branchFilter }: Props) {
   const [form, setForm] = useState(emptyForm());
   const [progressForm, setProgressForm] = useState({ report_date: new Date().toISOString().split('T')[0], workers_count: 0, work_completed: '', work_pending: '', materials_used: '', issues: '', notes: '', progress_percent: 0, weather: '' });
   const [expenseForm, setExpenseForm] = useState({ expense_date: new Date().toISOString().split('T')[0], category: 'materials' as ProjectExpense['category'], description: '', amount: 0, reference: '' });
-  const [assignForm, setAssignForm] = useState({ employee_id: '', role_on_project: 'worker' as ProjectAssignment['role_on_project'], daily_rate: 0, start_date: new Date().toISOString().split('T')[0] });
+  const [assignForm, setAssignForm] = useState({ employee_id: '', role_on_project: 'worker' as ProjectAssignment['role_on_project'], daily_rate: 0, start_date: new Date().toISOString().split('T')[0], end_date: '' });
 
   useEffect(() => { loadProjects(); loadCustomers(); loadEmployees(); }, [branchFilter]);
 
@@ -80,14 +84,21 @@ export default function ProjectsPage({ branchFilter }: Props) {
   const openProject = async (project: Project) => {
     setSelectedProject(project);
     setActiveTab('overview');
-    const [{ data: asn }, { data: prog }, { data: exp }] = await Promise.all([
+    const [{ data: asn }, { data: prog }, { data: exp }, { data: activityData }] = await Promise.all([
       supabase.from('project_assignments').select('*, employee:employees(full_name,position,employee_id)').eq('project_id', project.id).eq('is_active', true),
       supabase.from('project_progress').select('*').eq('project_id', project.id).order('report_date', { ascending: false }),
       supabase.from('project_expenses').select('*').eq('project_id', project.id).order('expense_date', { ascending: false }),
+      supabase.from('project_activities').select('*').eq('project_id', project.id).order('created_at', { ascending: false }),
     ]);
     setAssignments((asn ?? []) as ProjectAssignment[]);
     setProgressReports(prog ?? []);
     setExpenses(exp ?? []);
+    setActivities((activityData ?? []) as ProjectActivity[]);
+  };
+
+  const updateProjectCosts = async (project: Project, nextAssignments = assignments, nextExpenses = expenses) => {
+    const costs = calculateProjectFinancials(project, nextAssignments, nextExpenses);
+    await supabase.from('projects').update({ actual_cost: costs.totalCosts, profit: costs.estimatedProfit, updated_at: new Date().toISOString() }).eq('id', project.id);
   };
 
   const saveProject = async () => {
@@ -104,6 +115,9 @@ export default function ProjectsPage({ branchFilter }: Props) {
     };
     if (editing) {
       await supabase.from('projects').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editing.id);
+      const updatedProject = { ...editing, ...payload } as Project;
+      await updateProjectCosts(updatedProject);
+      setSelectedProject(updatedProject);
     } else {
       await supabase.from('projects').insert(payload);
     }
@@ -145,32 +159,55 @@ export default function ProjectsPage({ branchFilter }: Props) {
       branch_id: branchFilter ?? profile?.branch_id ?? null,
       created_by: profile?.id,
     });
-    const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0) + expenseForm.amount;
-    await supabase.from('projects').update({ actual_cost: totalExpenses, profit: (selectedProject.contract_value - totalExpenses), updated_at: new Date().toISOString() }).eq('id', selectedProject.id);
     const { data } = await supabase.from('project_expenses').select('*').eq('project_id', selectedProject.id).order('expense_date', { ascending: false });
-    setExpenses(data ?? []);
+    const nextExpenses = data ?? [];
+    await updateProjectCosts(selectedProject, assignments, nextExpenses);
+    setExpenses(nextExpenses);
     setShowExpenseForm(false);
     setSaving(false);
   };
 
   const addAssignment = async () => {
     if (!selectedProject || !assignForm.employee_id) return;
+    if (assignForm.end_date && assignForm.end_date < assignForm.start_date) {
+      setAssignmentError('End Date cannot be earlier than Start Date.');
+      return;
+    }
     setSaving(true);
-    await supabase.from('project_assignments').insert({
+    const assignmentPayload = {
       ...assignForm,
+      end_date: assignForm.end_date || null,
       project_id: selectedProject.id,
       branch_id: branchFilter ?? profile?.branch_id ?? null,
       assigned_by: profile?.id,
-    });
+    };
+    if (editingAssignment) {
+      await supabase.from('project_assignments').update({
+        role_on_project: assignmentPayload.role_on_project,
+        daily_rate: assignmentPayload.daily_rate,
+        start_date: assignmentPayload.start_date,
+        end_date: assignmentPayload.end_date,
+      }).eq('id', editingAssignment.id);
+    } else {
+      await supabase.from('project_assignments').insert(assignmentPayload);
+    }
     const { data } = await supabase.from('project_assignments').select('*, employee:employees(full_name,position,employee_id)').eq('project_id', selectedProject.id).eq('is_active', true);
-    setAssignments((data ?? []) as ProjectAssignment[]);
+    const nextAssignments = (data ?? []) as ProjectAssignment[];
+    await updateProjectCosts(selectedProject, nextAssignments, expenses);
+    setAssignments(nextAssignments);
+    setEditingAssignment(null);
+    setAssignmentError('');
     setShowAssignForm(false);
     setSaving(false);
   };
 
   const removeAssignment = async (id: string) => {
     await supabase.from('project_assignments').update({ is_active: false }).eq('id', id);
-    setAssignments(prev => prev.filter(a => a.id !== id));
+    const nextAssignments = assignments.filter(a => a.id !== id);
+    if (selectedProject) {
+      await updateProjectCosts(selectedProject, nextAssignments, expenses);
+    }
+    setAssignments(nextAssignments);
   };
 
   const deleteProject = async (id: string) => {
@@ -189,7 +226,9 @@ export default function ProjectsPage({ branchFilter }: Props) {
     return matchSearch && matchStatus;
   });
 
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
+  const costs = selectedProject ? calculateProjectFinancials(selectedProject, assignments, expenses) : { directExpenses: 0, employeeCosts: 0, totalCosts: 0, estimatedProfit: 0 };
+  const totalExpenses = costs.directExpenses;
+  const totalProjectCosts = costs.totalCosts;
   const latestProgress = progressReports[0];
 
   if (selectedProject) {
@@ -225,7 +264,8 @@ export default function ProjectsPage({ branchFilter }: Props) {
           {[
             { label: 'Contract Value', val: formatCurrency(selectedProject.contract_value), icon: <DollarSign size={15} className="text-teal-500" /> },
             { label: 'Total Expenses', val: formatCurrency(totalExpenses), icon: <BarChart2 size={15} className="text-red-400" /> },
-            { label: 'Est. Profit', val: formatCurrency(selectedProject.contract_value - totalExpenses), icon: <DollarSign size={15} className="text-green-500" /> },
+            { label: 'Total Project Costs', val: formatCurrency(totalProjectCosts), icon: <BarChart2 size={15} className="text-red-400" /> },
+            { label: 'Est. Profit', val: formatCurrency(costs.estimatedProfit), icon: <DollarSign size={15} className="text-green-500" /> },
             { label: 'Team Size', val: `${assignments.length} workers`, icon: <Users size={15} className="text-blue-400" /> },
           ].map(({ label, val, icon }) => (
             <div key={label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
@@ -250,7 +290,7 @@ export default function ProjectsPage({ branchFilter }: Props) {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-5 bg-slate-100 rounded-xl p-1 w-fit">
-          {(['overview', 'team', 'progress', 'expenses'] as const).map(t => (
+          {(['overview', 'team', 'progress', 'expenses', 'history'] as const).map(t => (
             <button key={t} onClick={() => setActiveTab(t)}
               className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-colors ${activeTab === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
               {t}
@@ -297,7 +337,7 @@ export default function ProjectsPage({ branchFilter }: Props) {
           <div>
             <div className="flex justify-between items-center mb-4">
               <h4 className="text-sm font-semibold text-slate-700">Assigned Team ({assignments.length})</h4>
-              <button onClick={() => setShowAssignForm(true)} className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium">
+              <button onClick={() => { setEditingAssignment(null); setAssignForm({ employee_id: '', role_on_project: 'worker', daily_rate: 0, start_date: new Date().toISOString().split('T')[0], end_date: '' }); setAssignmentError(''); setShowAssignForm(true); }} className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium">
                 <Plus size={13} /> Assign Employee
               </button>
             </div>
@@ -309,12 +349,13 @@ export default function ProjectsPage({ branchFilter }: Props) {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Role</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Daily Rate</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Start Date</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">End Date</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {assignments.length === 0 ? (
-                    <tr><td colSpan={5} className="py-8 text-center text-sm text-slate-400">No team members assigned</td></tr>
+                    <tr><td colSpan={6} className="py-8 text-center text-sm text-slate-400">No team members assigned</td></tr>
                   ) : assignments.map(a => {
                     const emp = (a as ProjectAssignment & { employee?: { full_name: string; position: string; employee_id: string } }).employee;
                     return (
@@ -326,7 +367,9 @@ export default function ProjectsPage({ branchFilter }: Props) {
                         <td className="px-4 py-3 text-sm text-slate-600 capitalize">{a.role_on_project.replace('_', ' ')}</td>
                         <td className="px-4 py-3 text-sm text-right text-slate-700">{formatCurrency(a.daily_rate)}</td>
                         <td className="px-4 py-3 text-sm text-slate-500">{formatDate(a.start_date)}</td>
+                        <td className="px-4 py-3 text-sm text-slate-500">{a.end_date ? formatDate(a.end_date) : '—'}</td>
                         <td className="px-4 py-3">
+                          <button onClick={() => { setEditingAssignment(a); setAssignForm({ employee_id: a.employee_id, role_on_project: a.role_on_project, daily_rate: a.daily_rate, start_date: a.start_date, end_date: a.end_date ?? '' }); setAssignmentError(''); setShowAssignForm(true); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={13} /></button>
                           <button onClick={() => removeAssignment(a.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={13} /></button>
                         </td>
                       </tr>
@@ -423,6 +466,17 @@ export default function ProjectsPage({ branchFilter }: Props) {
           </div>
         )}
 
+        {activeTab === 'history' && (
+          <div className="space-y-3">
+            {activities.length === 0 ? <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No project history yet.</div> : activities.map(activity => (
+              <div key={activity.id} className="bg-white rounded-xl border border-slate-200 px-5 py-4 flex items-center justify-between">
+                <div><div className="text-sm font-medium text-slate-800">{activity.description}</div><div className="text-xs text-slate-500 mt-1">{activity.activity_type.replace(/_/g, ' ')}</div></div>
+                <div className="text-xs text-slate-400">{formatDate(activity.created_at)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Assign Employee Modal */}
         {showAssignForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -463,7 +517,14 @@ export default function ProjectsPage({ branchFilter }: Props) {
                     <input type="date" value={assignForm.start_date} onChange={e => setAssignForm(f => ({ ...f, start_date: e.target.value }))}
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
+                    <input type="date" min={assignForm.start_date} value={assignForm.end_date} onChange={e => setAssignForm(f => ({ ...f, end_date: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
                 </div>
+                {assignmentError && <p className="text-sm text-red-600">{assignmentError}</p>}
+                                {saving ? 'Saving...' : editingAssignment ? 'Save Changes' : 'Assign'}
               </div>
               <div className="px-6 py-4 border-t border-slate-200 flex gap-3 justify-end">
                 <button onClick={() => setShowAssignForm(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>

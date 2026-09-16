@@ -62,16 +62,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const clearLocalAuth = async () => {
+      setUser(null);
+      setProfile(null);
+      setBranches([]);
+      setCurrentBranch(null);
+      setLoading(false);
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+    };
+
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error) {
+        void clearLocalAuth();
+        return;
+      }
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchProfile(session.user.id).finally(() => setLoading(false));
       } else {
         setLoading(false);
       }
+    }).catch(() => {
+      void clearLocalAuth();
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
         (async () => {
@@ -81,6 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null);
         setBranches([]);
         setCurrentBranch(null);
+        if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+          setLoading(false);
+        }
       }
     });
 

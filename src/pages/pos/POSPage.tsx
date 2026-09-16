@@ -11,7 +11,7 @@ import {
 import {
   detectQzTray, testPrint, testCashDrawer,
   browserPrintReceipt,
-  DEFAULT_DRAWER_COMMAND, type PrinterMode
+  DEFAULT_DRAWER_COMMAND, isCashPaymentMethod, type PrinterMode
 } from '../../lib/posHardware';
 import { checkStock, deductStockForSale, restoreStockForReturn } from '../../lib/stockManager';
 import { RotateCcw } from 'lucide-react';
@@ -614,13 +614,19 @@ export default function POSPage({ branchFilter }: Props) {
 
   // Print receipt
   const doPrintReceipt = async (receiptHtml: string) => {
+    console.debug('[POS drawer trace] doPrintReceipt', {
+      paymentMethod: receiptPaymentMethod,
+      printerMode: hwSettings?.printer_mode ?? 'browser-fallback',
+      drawerCommandSent: false,
+      action: 'receipt-print-only',
+    });
     if (!hwSettings) {
-      const ok = await browserPrintReceipt(receiptHtml);
+      const ok = await browserPrintReceipt(receiptHtml, receiptPaymentMethod);
       if (!ok) showToast('error', 'Could not open print window. Check popup blocker.');
       return;
     }
 
-    const result = await testPrint(hwSettings, receiptHtml);
+    const result = await testPrint(hwSettings, receiptHtml, receiptPaymentMethod);
     if (result.success) {
       showToast('success', result.message);
     } else {
@@ -629,8 +635,15 @@ export default function POSPage({ branchFilter }: Props) {
   };
 
   // Open cash drawer
-  const doOpenCashDrawer = async (reason: string = 'Transaction', paymentMethod: 'cash') => {
-    if (paymentMethod !== 'cash') {
+  const doOpenCashDrawer = async (reason: string = 'Transaction', paymentMethod: unknown = 'cash') => {
+    console.debug('[POS drawer trace] doOpenCashDrawer', {
+      reason,
+      paymentMethod,
+      printerMode: hwSettings?.printer_mode ?? 'unavailable',
+      drawerCommandSent: paymentMethod === 'cash',
+    });
+    console.trace('[POS drawer trace] doOpenCashDrawer-call');
+    if (!isCashPaymentMethod(paymentMethod)) {
       return;
     }
 
@@ -670,6 +683,12 @@ export default function POSPage({ branchFilter }: Props) {
 
   // Process payment
   const processPayment = async () => {
+    console.debug('[POS drawer trace] processPayment:start', {
+      paymentMethod,
+      printerMode: hwSettings?.printer_mode ?? 'unavailable',
+      autoOpenDrawer: hwSettings?.auto_open_drawer ?? false,
+      cashDrawerEnabled: hwSettings?.cash_drawer_enabled ?? false,
+    });
     if (cart.length === 0) {
       showToast('error', 'Cart is empty.');
       return;
@@ -679,7 +698,7 @@ export default function POSPage({ branchFilter }: Props) {
       setShowShiftModal(true);
       return;
     }
-    if (paymentMethod === 'cash' && Number(amountTendered) < total) {
+    if (isCashPaymentMethod(paymentMethod) && Number(amountTendered) < total) {
       showToast('error', 'Amount tendered is less than total.');
       return;
     }
@@ -730,6 +749,12 @@ export default function POSPage({ branchFilter }: Props) {
       status: 'completed',
       created_by: profile?.id,
     }).select().maybeSingle();
+
+    console.debug('[POS drawer trace] processPayment:transaction-saved', {
+      transactionId: tx?.id ?? null,
+      paymentMethod,
+      printerMode: hwSettings?.printer_mode ?? 'unavailable',
+    });
 
     if (txErr || !tx) {
       showToast('error', 'Sale failed: ' + (txErr?.message ?? 'Could not create transaction.'));
@@ -800,9 +825,26 @@ export default function POSPage({ branchFilter }: Props) {
     setLastReceiptHtml(receiptHtml);
     setShowReceiptPreview(true);
 
+    console.debug('[POS drawer trace] processPayment:receipt-generated', {
+      paymentMethod,
+      printerMode: hwSettings?.printer_mode ?? 'unavailable',
+      drawerCommandSent: false,
+    });
+
     // Auto open cash drawer only for real cash payments.
-    if (paymentMethod === 'cash' && hwSettings?.auto_open_drawer && hwSettings?.cash_drawer_enabled) {
+    if (isCashPaymentMethod(paymentMethod) && hwSettings?.auto_open_drawer && hwSettings?.cash_drawer_enabled) {
+      console.debug('[POS drawer trace] processPayment:auto-open-branch', {
+        paymentMethod,
+        printerMode: hwSettings.printer_mode,
+        drawerCommandSent: true,
+      });
       await doOpenCashDrawer('Cash sale: ' + txNum, paymentMethod);
+    } else {
+      console.debug('[POS drawer trace] processPayment:auto-open-skipped', {
+        paymentMethod,
+        printerMode: hwSettings?.printer_mode ?? 'unavailable',
+        drawerCommandSent: false,
+      });
     }
 
     setShowSuccess(true);

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { formatCurrency, Branch, Company } from '../lib/types';
+import { formatCurrency, formatDate, Branch, Company, Project, ProjectAssignment, ProjectExpense } from '../lib/types';
+import { calculateProjectFinancials } from '../lib/projectFinance';
 import StatCard from '../components/common/StatCard';
 import { statusBadge } from '../components/common/Badge';
 import { useAuth } from '../context/AuthContext';
 import {
-  Users, Truck, Package, Receipt, FileText, AlertTriangle,
+  Users, Truck, Package, Receipt, FileText, AlertTriangle, FolderKanban,
   TrendingUp, DollarSign, ShoppingBag, Clock, Building, ArrowLeftRight
 } from 'lucide-react';
 
@@ -20,6 +21,15 @@ interface DashboardStats {
   monthlyRevenue: number;
   pendingQuotations: number;
   pendingTransfers: number;
+  totalProjects: number;
+  activeProjects: number;
+  pendingProjects: number;
+  completedProjects: number;
+  projectContractValue: number;
+  projectExpenses: number;
+  projectEmployeeCosts: number;
+  projectProfit: number;
+  projectCosts: number;
 }
 
 interface RecentInvoice {
@@ -42,9 +52,12 @@ export default function Dashboard({ branchFilter }: Props) {
   const [stats, setStats] = useState<DashboardStats>({
     totalCustomers: 0, totalSuppliers: 0, totalProducts: 0, lowStockCount: 0,
     totalInvoices: 0, unpaidInvoices: 0, unpaidAmount: 0, monthlyRevenue: 0,
-    pendingQuotations: 0, pendingTransfers: 0,
+    pendingQuotations: 0, pendingTransfers: 0, totalProjects: 0, activeProjects: 0,
+    pendingProjects: 0, completedProjects: 0, projectContractValue: 0, projectExpenses: 0,
+    projectEmployeeCosts: 0, projectProfit: 0, projectCosts: 0,
   });
   const [recentInvoices, setRecentInvoices] = useState<RecentInvoice[]>([]);
+  const [recentProjectActivities, setRecentProjectActivities] = useState<{ id: string; description: string; created_at: string; project?: { name: string } }[]>([]);
   const [loading, setLoading] = useState(true);
   const [company, setCompany] = useState<Company | null>(null);
 
@@ -64,6 +77,10 @@ export default function Dashboard({ branchFilter }: Props) {
       let quoteQuery = supabase.from('quotations').select('*', { count: 'exact', head: true }).in('status', ['draft', 'sent']);
       let recentQuery = supabase.from('invoices').select('id, invoice_number, customer_name, total, status, issue_date, branch_id, branch:branches(id, name)').order('created_at', { ascending: false }).limit(5);
       let transferQuery = supabase.from('stock_transfers').select('*', { count: 'exact', head: true }).in('status', ['requested', 'approved', 'shipped']);
+      let projectQuery = supabase.from('projects').select('*');
+      let assignmentQuery = supabase.from('project_assignments').select('*').eq('is_active', true);
+      let projectExpenseQuery = supabase.from('project_expenses').select('*');
+      let activityQuery = supabase.from('project_activities').select('id, description, created_at, project:projects(name)').order('created_at', { ascending: false }).limit(5);
 
       if (branchFilter) {
         customerQuery = customerQuery.eq('branch_id', branchFilter);
@@ -75,21 +92,34 @@ export default function Dashboard({ branchFilter }: Props) {
         quoteQuery = quoteQuery.eq('branch_id', branchFilter);
         recentQuery = recentQuery.eq('branch_id', branchFilter);
         transferQuery = transferQuery.or(`from_branch_id.eq.${branchFilter},to_branch_id.eq.${branchFilter}`);
+        projectQuery = projectQuery.eq('branch_id', branchFilter);
+        assignmentQuery = assignmentQuery.eq('branch_id', branchFilter);
+        projectExpenseQuery = projectExpenseQuery.eq('branch_id', branchFilter);
+        activityQuery = activityQuery.eq('branch_id', branchFilter);
       }
 
       const [
         { count: customers }, { count: suppliers }, { count: products }, { count: invoices },
         { data: unpaidData }, { data: monthData }, { count: pendingQuotes },
         { data: recent }, { count: transfers },
+        { data: projectData }, { data: assignmentData }, { data: projectExpenseData }, { data: activityData },
         { data: companyData },
       ] = await Promise.all([
         customerQuery, supplierQuery, productQuery, invoiceQuery,
-        unpaidQuery, monthQuery, quoteQuery, recentQuery, transferQuery,
+        unpaidQuery, monthQuery, quoteQuery, recentQuery, transferQuery, projectQuery, assignmentQuery, projectExpenseQuery, activityQuery,
         supabase.from('companies').select('*').eq('is_active', true).order('name').limit(1).maybeSingle(),
       ]);
 
       const unpaidAmount = (unpaidData ?? []).reduce((s, i) => s + (i.balance_due ?? 0), 0);
       const monthlyRevenue = (monthData ?? []).reduce((s, i) => s + (i.total ?? 0), 0);
+      const projects = (projectData ?? []) as Project[];
+      const assignments = (assignmentData ?? []) as ProjectAssignment[];
+      const projectExpenses = (projectExpenseData ?? []) as ProjectExpense[];
+      const assignmentsByProject = new Map<string, ProjectAssignment[]>();
+      const expensesByProject = new Map<string, ProjectExpense[]>();
+      assignments.forEach(assignment => assignmentsByProject.set(assignment.project_id, [...(assignmentsByProject.get(assignment.project_id) ?? []), assignment]));
+      projectExpenses.forEach(expense => expensesByProject.set(expense.project_id, [...(expensesByProject.get(expense.project_id) ?? []), expense]));
+      const projectSummaries = projects.map(project => calculateProjectFinancials(project, assignmentsByProject.get(project.id), expensesByProject.get(project.id)));
 
       setStats({
         totalCustomers: customers ?? 0, totalSuppliers: suppliers ?? 0,
@@ -97,11 +127,24 @@ export default function Dashboard({ branchFilter }: Props) {
         totalInvoices: invoices ?? 0, unpaidInvoices: (unpaidData ?? []).length,
         unpaidAmount, monthlyRevenue, pendingQuotations: pendingQuotes ?? 0,
         pendingTransfers: transfers ?? 0,
+        totalProjects: projects.length,
+        activeProjects: projects.filter(p => p.status === 'active').length,
+        pendingProjects: projects.filter(p => p.status === 'pending').length,
+        completedProjects: projects.filter(p => p.status === 'completed').length,
+        projectContractValue: projects.reduce((sum, p) => sum + Number(p.contract_value ?? 0), 0),
+        projectExpenses: projectSummaries.reduce((sum, summary) => sum + summary.directExpenses, 0),
+        projectEmployeeCosts: projectSummaries.reduce((sum, summary) => sum + summary.employeeCosts, 0),
+        projectProfit: projectSummaries.reduce((sum, summary) => sum + summary.estimatedProfit, 0),
+        projectCosts: projectSummaries.reduce((sum, summary) => sum + summary.totalCosts, 0),
       });
       setRecentInvoices((recent ?? []).map(r => ({
         ...r,
         branch: Array.isArray(r.branch) ? (r.branch[0] as unknown as Branch) : (r.branch as unknown as Branch | undefined),
       })) as RecentInvoice[]);
+      setRecentProjectActivities((activityData ?? []).map(activity => ({
+        ...activity,
+        project: Array.isArray(activity.project) ? activity.project[0] : activity.project,
+      })) as { id: string; description: string; created_at: string; project?: { name: string } }[]);
       setCompany((companyData as Company | null) ?? null);
     } finally {
       setLoading(false);
@@ -158,6 +201,7 @@ export default function Dashboard({ branchFilter }: Props) {
         <StatCard title="Outstanding" value={formatCurrency(stats.unpaidAmount)} subtitle={`${stats.unpaidInvoices} invoices`} icon={<Clock size={17} />} color="amber" />
         <StatCard title="Overdue Risk" value={stats.unpaidInvoices.toString()} subtitle="invoices unpaid" icon={<AlertTriangle size={17} />} color="red" />
         <StatCard title="Pending Transfers" value={stats.pendingTransfers.toString()} icon={<ArrowLeftRight size={17} />} color="cyan" />
+        <StatCard title="Active Projects" value={stats.activeProjects.toString()} subtitle={`${stats.totalProjects} total`} icon={<FolderKanban size={17} />} color="blue" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -211,6 +255,42 @@ export default function Dashboard({ branchFilter }: Props) {
               </div>
             ))}
           </div>
+        </div>
+        <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 className="font-semibold text-slate-800">Recent Project Activity</h3>
+            <span className="text-xs text-slate-400">Costs: {formatCurrency(stats.projectCosts)}</span>
+          </div>
+          <div className="divide-y divide-slate-50">
+            {recentProjectActivities.length === 0 ? <div className="px-5 py-8 text-center text-slate-400 text-sm">No project activity yet</div> : recentProjectActivities.map(activity => (
+              <div key={activity.id} className="px-5 py-3 flex items-center justify-between">
+                <div><div className="text-sm font-medium text-slate-800">{activity.description}</div><div className="text-xs text-slate-400">{activity.project?.name ?? 'Project'}</div></div>
+                <div className="text-xs text-slate-400">{formatDate(activity.created_at)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border border-slate-200">
+        <div className="px-5 py-4 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800">Project Summary</h3>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 p-5">
+          {[
+            ['Total Projects', String(stats.totalProjects)],
+            ['Active', String(stats.activeProjects)],
+            ['Pending', String(stats.pendingProjects)],
+            ['Completed', String(stats.completedProjects)],
+            ['Contract Value', formatCurrency(stats.projectContractValue)],
+            ['Project Expenses', formatCurrency(stats.projectExpenses)],
+            ['Team Costs', formatCurrency(stats.projectEmployeeCosts)],
+            ['Estimated Profit', formatCurrency(stats.projectProfit)],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <div className="text-xs text-slate-500">{label}</div>
+              <div className="text-sm font-bold text-slate-800 mt-1">{value}</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

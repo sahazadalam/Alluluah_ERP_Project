@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { AuditLog, Expense, Income, CashWithdrawal, DailyCashClosing } from '../../lib/types';
+import { AuditLog, Expense, Income, CashWithdrawal, DailyCashClosing, ProjectActivity, ProjectExpense } from '../../lib/types';
 import { formatCurrency, formatDate, formatDateTime } from '../../lib/types';
 import Modal from '../../components/common/Modal';
 import StatCard from '../../components/common/StatCard';
@@ -87,6 +87,8 @@ export default function CashflowPage({ branchFilter }: Props) {
 
   // Audit logs
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [projectActivities, setProjectActivities] = useState<ProjectActivity[]>([]);
+  const [projectExpenses, setProjectExpenses] = useState<Array<ProjectExpense & { project?: { id: string; name: string; customer_name: string } }>>([]);
   const [auditFilters, setAuditFilters] = useState({
     date_from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     date_to: new Date().toISOString().split('T')[0],
@@ -133,15 +135,33 @@ export default function CashflowPage({ branchFilter }: Props) {
       const { data: auditData } = await auditQuery;
       setAuditLogs(auditData ?? []);
 
+      let projectActivityQuery = supabase.from('project_activities').select('*, project:projects(name)').order('created_at', { ascending: false }).limit(100);
+      if (branchId) projectActivityQuery = projectActivityQuery.eq('branch_id', branchId);
+      if (auditFilters.date_from) projectActivityQuery = projectActivityQuery.gte('created_at', auditFilters.date_from);
+      if (auditFilters.date_to) projectActivityQuery = projectActivityQuery.lte('created_at', auditFilters.date_to + ' 23:59:59');
+      const { data: projectActivityData } = await projectActivityQuery;
+      setProjectActivities((projectActivityData ?? []) as ProjectActivity[]);
+
+      let projectExpenseQuery = supabase.from('project_expenses').select('*, project:projects(id, name, customer_name)').order('expense_date', { ascending: false });
+      if (branchId) projectExpenseQuery = projectExpenseQuery.eq('branch_id', branchId);
+      if (auditFilters.date_from) projectExpenseQuery = projectExpenseQuery.gte('expense_date', auditFilters.date_from);
+      if (auditFilters.date_to) projectExpenseQuery = projectExpenseQuery.lte('expense_date', auditFilters.date_to);
+      const { data: projectExpenseData } = await projectExpenseQuery;
+      setProjectExpenses((projectExpenseData ?? []) as Array<ProjectExpense & { project?: { id: string; name: string; customer_name: string } }>);
+
       // Load expenses
       let expenseQuery = supabase.from('expenses').select('*, branch:branches(*)').eq('is_deleted', false).order('expense_date', { ascending: false });
       if (branchId) expenseQuery = expenseQuery.eq('branch_id', branchId);
+      if (auditFilters.date_from) expenseQuery = expenseQuery.gte('expense_date', auditFilters.date_from);
+      if (auditFilters.date_to) expenseQuery = expenseQuery.lte('expense_date', auditFilters.date_to);
       const { data: expenseData } = await expenseQuery;
       setExpenses(expenseData ?? []);
 
       // Load income
       let incomeQuery = supabase.from('income').select('*, branch:branches(*)').eq('is_deleted', false).order('income_date', { ascending: false });
       if (branchId) incomeQuery = incomeQuery.eq('branch_id', branchId);
+      if (auditFilters.date_from) incomeQuery = incomeQuery.gte('income_date', auditFilters.date_from);
+      if (auditFilters.date_to) incomeQuery = incomeQuery.lte('income_date', auditFilters.date_to);
       const { data: incomeData } = await incomeQuery;
       setIncomes(incomeData ?? []);
 
@@ -162,7 +182,8 @@ export default function CashflowPage({ branchFilter }: Props) {
   };
 
   // Stats
-  const totalExpenses = expenses.filter(e => e.approval_status === 'approved').reduce((s, e) => s + e.amount, 0);
+  const projectExpenseTotal = projectExpenses.reduce((sum, expense) => sum + Number(expense.amount ?? 0), 0);
+  const totalExpenses = expenses.filter(e => e.approval_status === 'approved').reduce((s, e) => s + e.amount, 0) + projectExpenseTotal;
   const totalIncome = incomes.filter(i => i.approval_status === 'approved').reduce((s, i) => s + i.amount, 0);
   const pendingWithdrawals = withdrawals.filter(w => w.status === 'pending').length;
   const netCashflow = totalIncome - totalExpenses;
@@ -356,6 +377,29 @@ export default function CashflowPage({ branchFilter }: Props) {
                   </div>
 
                   <div className="overflow-x-auto">
+                    <h3 className="text-sm font-semibold text-slate-700 mb-2">Project Financial Movements</h3>
+                    <table className="w-full text-sm">
+                      <thead><tr className="bg-slate-50">
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Date</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Project</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Project ID</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Description</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Expense</th>
+                      </tr></thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {projectExpenses.length === 0 ? <tr><td colSpan={5} className="text-center py-8 text-slate-400">No project expenses found</td></tr> : projectExpenses.map(expense => (
+                          <tr key={expense.id} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 text-slate-600">{formatDate(expense.expense_date)}</td>
+                            <td className="px-4 py-3 text-slate-800">{expense.project?.name ?? 'Project'}</td>
+                            <td className="px-4 py-3 text-xs text-slate-500">{expense.project_id}</td>
+                            <td className="px-4 py-3 text-slate-700">{expense.description}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-red-600">{formatCurrency(expense.amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-slate-50">
@@ -399,6 +443,27 @@ export default function CashflowPage({ branchFilter }: Props) {
                               <button onClick={() => { setSelectedItem(log); setShowDetailModal(true); }}
                                 className="p-1 text-slate-400 hover:text-blue-600"><Eye size={14} /></button>
                             </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <h3 className="text-sm font-semibold text-slate-700 mb-2">Project Activity</h3>
+                    <table className="w-full text-sm">
+                      <thead><tr className="bg-slate-50">
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Date/Time</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Project</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Activity</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Type</th>
+                      </tr></thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {projectActivities.length === 0 ? <tr><td colSpan={4} className="text-center py-8 text-slate-400">No project activity found</td></tr> : projectActivities.map(activity => (
+                          <tr key={activity.id} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 text-slate-600">{formatDateTime(activity.created_at)}</td>
+                            <td className="px-4 py-3 text-slate-800">{Array.isArray(activity.project) ? activity.project[0]?.name : activity.project?.name ?? 'Project'}</td>
+                            <td className="px-4 py-3 text-slate-700">{activity.description}</td>
+                            <td className="px-4 py-3 text-slate-600 capitalize">{activity.activity_type.replace(/_/g, ' ')}</td>
                           </tr>
                         ))}
                       </tbody>
